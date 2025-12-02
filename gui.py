@@ -25,6 +25,9 @@ from soql_query_frame import SOQLQueryFrame
 from metadata_switch_manager import MetadataSwitchManager
 from salesforce_switch_frame import SalesforceSwitchFrame
 
+# ✅ NEW - Report Exporter Module
+from report_exporter.main_app import SalesforceExporterApp
+
 
 # Set appearance mode and default color theme
 ctk.set_appearance_mode(APPEARANCE_MODE)
@@ -68,6 +71,9 @@ class SalesforceExporterGUI(ctk.CTk):
         
         self.metadata_switch_manager: Optional[MetadataSwitchManager] = None
         self.switch_frame = None  # Will be created after login
+        
+        # ✅ NEW - Report Exporter frame
+        self.report_exporter_frame = None  # Will be created after login
 
     # ==================================
     # Screen 1: Login & Authentication
@@ -262,7 +268,7 @@ class SalesforceExporterGUI(ctk.CTk):
         export_buttons_frame.grid_columnconfigure(3, weight=1)
 
         # Configure 5 columns with equal weight
-        for i in range(5):
+        for i in range(6):
             export_buttons_frame.grid_columnconfigure(i, weight=1)
         
         self.export_picklist_button = ctk.CTkButton(
@@ -315,6 +321,18 @@ class SalesforceExporterGUI(ctk.CTk):
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.salesforce_switch_button.grid(row=0, column=4, sticky="ew", padx=(5, 0))
+        
+        # ✅ NEW 6TH BUTTON - REPORT EXPORTER
+        self.report_exporter_button = ctk.CTkButton(
+            export_buttons_frame,
+            text="📊 Report Export",
+            command=self.report_exporter_action,
+            height=50,
+            fg_color="#16A085",  # Teal/green color
+            hover_color="#138D75",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.report_exporter_button.grid(row=0, column=5, sticky="ew", padx=(5, 0))
 
 
     def _setup_available_objects_panel(self, parent):
@@ -573,6 +591,65 @@ class SalesforceExporterGUI(ctk.CTk):
         if self.switch_frame:
             self.switch_frame.grid_forget()
         self.export_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+    
+    # ✅ NEW METHOD 1 - Report Exporter Action
+    def report_exporter_action(self):
+        """Handle Report Exporter button click (6th button)"""
+        if not self.sf_client:
+            messagebox.showerror("Error", "Not logged in. Please log in first.")
+            return
+        
+        # Build session info for Report Exporter
+        session_info = {
+            "session_id": self.sf_client.session_id,
+            "instance_url": self.sf_client.base_url,
+            "api_version": self.sf_client.api_version,
+            "user_name": self.username_entry.get()  # Get from login
+        }
+        
+        # ✅ FIXED: Create or show the Toplevel window
+        if self.report_exporter_frame is None or not self.report_exporter_frame.winfo_exists():
+            # Create new window
+            self.report_exporter_frame = SalesforceExporterApp(
+                master=self,
+                session_info=session_info,
+                on_logout=self.show_export_frame_from_report_exporter
+            )
+        else:
+            # Window already exists, just show it
+            self.report_exporter_frame.deiconify()
+            self.report_exporter_frame.lift()
+            self.report_exporter_frame.focus_force()
+        
+        # ✅ FIXED: Hide main window (not grid_forget)
+        self.withdraw()
+        
+        self._log("📊 Opened Report Exporter")
+    
+    # ✅ NEW METHOD 2 - Back from Report Exporter
+    def show_export_frame_from_report_exporter(self):
+        """Show the export frame and hide report exporter frame"""
+        if self.report_exporter_frame:
+            try:
+                # ✅ FIXED: Toplevel windows use withdraw(), not grid_forget()
+                self.report_exporter_frame.withdraw()
+                
+                # Alternative: destroy and recreate next time
+                # self.report_exporter_frame.destroy()
+                # self.report_exporter_frame = None
+                
+            except Exception as e:
+                print(f"⚠️ Error hiding report exporter: {e}")
+        
+        # Show main export frame
+        self.export_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        
+        # Bring main window to front
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        
+        self._log("⬅️ Returned from Report Exporter")
 
 
     # ==================================
@@ -867,6 +944,15 @@ class SalesforceExporterGUI(ctk.CTk):
                 self.switch_frame.destroy()
                 self.switch_frame = None
             self.metadata_switch_manager = None
+            
+            # ✅ Clear report exporter frame (Toplevel window)
+            if self.report_exporter_frame:
+                try:
+                    if self.report_exporter_frame.winfo_exists():
+                        self.report_exporter_frame.destroy()
+                except:
+                    pass
+                self.report_exporter_frame = None
             
             # Reset the login button state and text
             self.login_button.configure(state="normal", text="Login to Salesforce")
