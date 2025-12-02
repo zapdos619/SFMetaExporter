@@ -1,0 +1,894 @@
+"""
+Main GUI application for Salesforce Picklist & Metadata Exporter
+"""
+import os
+import time
+import tkinter as tk
+from datetime import datetime
+from typing import Optional, Set, List
+from tkinter import messagebox, filedialog, END
+from threading_helper import ThreadHelper
+
+import customtkinter as ctk
+
+from config import WINDOW_TITLE, WINDOW_GEOMETRY, APPEARANCE_MODE, COLOR_THEME
+from config import DEFAULT_PICKLIST_FILENAME, DEFAULT_METADATA_FILENAME, DEFAULT_CONTENTDOCUMENT_FILENAME
+from salesforce_client import SalesforceClient
+from picklist_exporter import PicklistExporter
+from metadata_exporter import MetadataExporter
+from content_document_exporter import ContentDocumentExporter
+from utils import format_runtime, print_picklist_statistics, print_metadata_statistics, print_content_document_statistics
+
+from soql_runner import SOQLRunner
+from soql_query_frame import SOQLQueryFrame
+
+from metadata_switch_manager import MetadataSwitchManager
+from salesforce_switch_frame import SalesforceSwitchFrame
+
+
+# Set appearance mode and default color theme
+ctk.set_appearance_mode(APPEARANCE_MODE)
+ctk.set_default_color_theme(COLOR_THEME)
+
+
+class SalesforceExporterGUI(ctk.CTk):
+    """Main GUI application class"""
+
+    def __init__(self):
+        super().__init__()
+
+        self.title(WINDOW_TITLE)
+        self.geometry(WINDOW_GEOMETRY)
+
+        self.sf_client: Optional[SalesforceClient] = None
+        self.picklist_exporter: Optional[PicklistExporter] = None
+        self.metadata_exporter: Optional[MetadataExporter] = None
+        self.content_document_exporter: Optional[ContentDocumentExporter] = None
+        self.all_org_objects: List[str] = []
+        self.selected_objects: Set[str] = set()
+
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        # Create frames
+        self.login_frame = ctk.CTkFrame(self)
+        self.export_frame = ctk.CTkFrame(self)
+
+        self.login_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        self.export_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+
+        self._setup_login_frame()
+        self._setup_export_frame()
+
+        # Initially show login frame
+        self.export_frame.grid_forget()
+
+        # Create SOQL frame
+        self.soql_frame = None  # Will be created after login
+        
+        self.metadata_switch_manager: Optional[MetadataSwitchManager] = None
+        self.switch_frame = None  # Will be created after login
+
+    # ==================================
+    # Screen 1: Login & Authentication
+    # ==================================
+
+    def _setup_login_frame(self):
+        """Setup the login screen UI"""
+        login_frame = self.login_frame
+        login_frame.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            login_frame,
+            text="Salesforce Login",
+            font=ctk.CTkFont(size=30, weight="bold")
+        ).grid(row=0, column=0, columnspan=2, pady=(50, 40))
+
+        def create_input_row(parent, row, label_text, password_mode=False):
+            ctk.CTkLabel(
+                parent,
+                text=label_text,
+                anchor="w",
+                font=ctk.CTkFont(size=14)
+            ).grid(row=row, column=0, padx=10, pady=15, sticky="w")
+            entry = ctk.CTkEntry(parent, width=350, show="*" if password_mode else "")
+            entry.grid(row=row, column=1, padx=10, pady=15, sticky="ew")
+            return entry
+
+        self.username_entry = create_input_row(login_frame, 1, "Username:")
+        self.password_entry = create_input_row(login_frame, 2, "Password:", password_mode=True)
+        self.token_entry = create_input_row(login_frame, 3, "Security Token:", password_mode=True)
+
+        ctk.CTkLabel(
+            login_frame,
+            text="Org Type:",
+            anchor="w",
+            font=ctk.CTkFont(size=14)
+        ).grid(row=4, column=0, padx=10, pady=15, sticky="w")
+
+        self.org_type_var = ctk.StringVar(value="Production")
+        radio_prod = ctk.CTkRadioButton(
+            login_frame,
+            text="Production",
+            variable=self.org_type_var,
+            value="Production"
+        )
+        radio_test = ctk.CTkRadioButton(
+            login_frame,
+            text="Sandbox/Test",
+            variable=self.org_type_var,
+            value="Sandbox"
+        )
+
+        radio_prod.grid(row=4, column=1, padx=(10, 5), pady=15, sticky="w")
+        radio_test.grid(row=4, column=1, padx=(140, 10), pady=15, sticky="w")
+
+        self.login_button = ctk.CTkButton(
+            login_frame,
+            text="Login to Salesforce",
+            command=self.login_action,
+            width=150,
+            height=50,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.login_button.grid(row=5, column=0, columnspan=2, pady=50, sticky="ew", padx=10)
+
+    def login_action(self):
+        """Handle login button click"""
+        self.login_button.configure(state="disabled", text="Connecting...")
+
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get().strip()
+        token = self.token_entry.get().strip()
+        domain = 'test' if self.org_type_var.get() == 'Sandbox' else 'login'
+
+        if not all([username, password, token]):
+            messagebox.showerror("Input Error", "All fields (Username, Password, Security Token) are required.")
+            self.login_button.configure(state="normal", text="Login to Salesforce")
+            return
+
+        # Run login in background thread
+        def do_login():
+            try:
+                self.sf_client = SalesforceClient(
+                    username=username,
+                    password=password,
+                    security_token=token,
+                    domain=domain,
+                    status_callback=self.update_status
+                )
+
+                # Initialize exporters
+                self.picklist_exporter = PicklistExporter(self.sf_client)
+                self.metadata_exporter = MetadataExporter(self.sf_client)
+                self.content_document_exporter = ContentDocumentExporter(self.sf_client)
+
+                self.all_org_objects = self.sf_client.get_all_objects()
+
+                # Update UI on main thread
+                self.after(0, self._on_login_success)
+
+            except Exception as e:
+                # Handle error on main thread
+                self.after(0, lambda: self._on_login_error(str(e)))
+
+        ThreadHelper.run_in_thread(do_login)
+
+    def _on_login_success(self):
+        """Called after successful login"""
+        messagebox.showinfo("Success", "Successfully connected to Salesforce!")
+
+        # Switch to Export Frame
+        self.login_frame.grid_forget()
+        self.export_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        self.populate_available_objects(self.all_org_objects)
+        self.populate_selected_objects()
+        self.login_button.configure(state="normal", text="Login to Salesforce")
+
+        # Initialize SOQL Runner
+        self.soql_runner = SOQLRunner(self.sf_client)
+        
+        # Initialize Metadata Switch Manager (NEW)
+        self.metadata_switch_manager = MetadataSwitchManager(
+            self.sf_client.sf,
+            status_callback=self.update_status
+        )
+
+    def _on_login_error(self, error_message):
+        """Called when login fails"""
+        messagebox.showerror("Login Failed", f"Connection Error: {error_message}")
+        self.sf_client = None
+        self.login_button.configure(state="normal", text="Login to Salesforce")
+
+    # ==================================
+    # Screen 2: Object Selection & Export
+    # ==================================
+
+    def _setup_export_frame(self):
+        """Setup the export screen UI"""
+        export_frame = self.export_frame
+        export_frame.grid_rowconfigure(2, weight=1)
+        export_frame.grid_columnconfigure(0, weight=1)
+
+        # Header with logout button
+        header_frame = ctk.CTkFrame(export_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, pady=(10, 5), sticky="ew")
+        header_frame.columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            header_frame,
+            text="Object Selection & Export",
+            font=ctk.CTkFont(size=30, weight="bold")
+        ).grid(row=0, column=0, sticky="w")
+
+        self.logout_button = ctk.CTkButton(
+            header_frame,
+            text="Logout",
+            command=self.logout_action,
+            width=100,
+            fg_color="#CC3333"
+        )
+        self.logout_button.grid(row=0, column=1, sticky="e", padx=10)
+
+        # Selection frame with three columns
+        selection_frame = ctk.CTkFrame(export_frame)
+        selection_frame.grid(row=1, column=0, pady=10, sticky="nsew")
+        selection_frame.grid_columnconfigure(0, weight=3)
+        selection_frame.grid_columnconfigure(1, weight=1)
+        selection_frame.grid_columnconfigure(2, weight=2)
+        selection_frame.grid_rowconfigure(0, weight=1)
+
+        # Available Objects (Left)
+        self._setup_available_objects_panel(selection_frame)
+
+        # Action Buttons (Middle)
+        self._setup_action_buttons_panel(selection_frame)
+
+        # Selected Objects (Right)
+        self._setup_selected_objects_panel(selection_frame)
+
+        # Status textbox
+        self.status_textbox = ctk.CTkTextbox(export_frame, height=150)
+        self.status_textbox.grid(row=2, column=0, padx=20, pady=(10, 10), sticky="ew")
+        self.status_textbox.insert("end", "Status: Ready to select objects and export.")
+        self.status_textbox.configure(state="disabled")
+
+        # Export buttons frame (NOW WITH 5 BUTTONS)
+        export_buttons_frame = ctk.CTkFrame(export_frame, fg_color="transparent")
+        export_buttons_frame.grid(row=3, column=0, pady=(10, 20), sticky="ew", padx=20)  
+        export_buttons_frame.grid_columnconfigure(0, weight=1)
+        export_buttons_frame.grid_columnconfigure(1, weight=1)
+        export_buttons_frame.grid_columnconfigure(2, weight=1)
+        export_buttons_frame.grid_columnconfigure(3, weight=1)
+
+        # Configure 5 columns with equal weight
+        for i in range(5):
+            export_buttons_frame.grid_columnconfigure(i, weight=1)
+        
+        self.export_picklist_button = ctk.CTkButton(
+            export_buttons_frame,
+            text="Export Picklist Data",
+            command=self.export_picklist_action,
+            height=50,
+            fg_color="green",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.export_picklist_button.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        
+        self.export_metadata_button = ctk.CTkButton(
+            export_buttons_frame,
+            text="Export Metadata",
+            command=self.export_metadata_action,
+            height=50,
+            fg_color="#1F538D",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.export_metadata_button.grid(row=0, column=1, sticky="ew", padx=(5, 5))
+        
+        self.download_files_button = ctk.CTkButton(
+            export_buttons_frame,
+            text="Download Files",
+            command=self.download_files_action,
+            height=50,
+            fg_color="#FF6B35",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.download_files_button.grid(row=0, column=2, sticky="ew", padx=(5, 5))
+        
+        self.run_soql_button = ctk.CTkButton(
+            export_buttons_frame,
+            text="Run SOQL",
+            command=self.run_soql_action,
+            height=50,
+            fg_color="#9B59B6",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.run_soql_button.grid(row=0, column=3, sticky="ew", padx=(5, 5))
+        
+        # NEW 5TH BUTTON - SALESFORCE SWITCH
+        self.salesforce_switch_button = ctk.CTkButton(
+            export_buttons_frame,
+            text="Salesforce Switch",
+            command=self.salesforce_switch_action,
+            height=50,
+            fg_color="#E74C3C",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.salesforce_switch_button.grid(row=0, column=4, sticky="ew", padx=(5, 0))
+
+
+    def _setup_available_objects_panel(self, parent):
+        """Setup the available objects panel"""
+        available_frame = ctk.CTkFrame(parent)
+        available_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        available_frame.grid_rowconfigure(2, weight=1)
+        available_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            available_frame,
+            text="Available Objects (Org)",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).grid(row=0, column=0, pady=(5, 5))
+
+        self.search_entry = ctk.CTkEntry(
+            available_frame,
+            placeholder_text="Search Object API Name...",
+            height=35
+        )
+        self.search_entry.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+        self.search_entry.bind("<KeyRelease>", self.filter_available_objects)
+
+        self.available_listbox = tk.Listbox(
+            available_frame,
+            selectmode="extended",
+            height=15,
+            exportselection=False,
+            font=("Arial", 12),
+            borderwidth=0,
+            highlightthickness=0,
+            selectbackground="#1F538D",
+            fg="white",
+            background="#242424"
+        )
+        self.available_listbox.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="nsew")
+
+    def _setup_action_buttons_panel(self, parent):
+        """Setup the action buttons panel"""
+        action_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        action_frame.grid(row=0, column=1, padx=5, pady=10, sticky="n")
+
+        ctk.CTkLabel(
+            action_frame,
+            text="Actions",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(pady=5)
+
+        ctk.CTkButton(
+            action_frame,
+            text=">> Add Selected >>",
+            command=self.add_selected_to_export,
+            height=35
+        ).pack(pady=5, padx=5, fill="x")
+
+        ctk.CTkButton(
+            action_frame,
+            text="<< Remove Selected <<",
+            command=self.remove_selected_from_export,
+            height=35
+        ).pack(pady=5, padx=5, fill="x")
+
+        ctk.CTkButton(
+            action_frame,
+            text="Select All",
+            command=self.select_all_available,
+            height=35
+        ).pack(pady=(20, 5), padx=5, fill="x")
+
+        ctk.CTkButton(
+            action_frame,
+            text="Deselect All",
+            command=self.deselect_all_available,
+            height=35
+        ).pack(pady=5, padx=5, fill="x")
+
+    def _setup_selected_objects_panel(self, parent):
+        """Setup the selected objects panel"""
+        selected_frame = ctk.CTkFrame(parent)
+        selected_frame.grid(row=0, column=2, padx=10, pady=10, sticky="nsew")
+        selected_frame.grid_rowconfigure(1, weight=1)
+        selected_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            selected_frame,
+            text="Selected for Export",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).grid(row=0, column=0, pady=(5, 5))
+
+        self.selected_listbox = tk.Listbox(
+            selected_frame,
+            selectmode="extended",
+            height=15,
+            exportselection=False,
+            font=("Arial", 12),
+            borderwidth=0,
+            highlightthickness=0,
+            selectbackground="#3366CC",
+            fg="white",
+            background="#242424"
+        )
+        self.selected_listbox.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
+
+    # ==================================
+    # Object List Management Methods
+    # ==================================
+
+    def populate_available_objects(self, objects: List[str]):
+        """Populates the Left ListBox based on the current search filter"""
+        self.available_listbox.delete(0, END)
+        for obj in objects:
+            self.available_listbox.insert(END, obj)
+            if obj in self.selected_objects:
+                idx = self.available_listbox.get(0, END).index(obj)
+                self.available_listbox.itemconfig(idx, {'fg': '#87CEEB'})
+
+    def populate_selected_objects(self):
+        """Populates the Right ListBox from the internal selected_objects set"""
+        self.selected_listbox.delete(0, END)
+        for obj in sorted(list(self.selected_objects)):
+            self.selected_listbox.insert(END, obj)
+
+    def filter_available_objects(self, event):
+        """Filters the Available ListBox based on the search entry content"""
+        search_term = self.search_entry.get().lower()
+        filtered_objects = [
+            obj for obj in self.all_org_objects
+            if search_term in obj.lower()
+        ]
+        self.populate_available_objects(filtered_objects)
+
+    def add_selected_to_export(self):
+        """Adds selected objects from the Available List to the Export Set"""
+        selected_indices = self.available_listbox.curselection()
+
+        if not selected_indices:
+            messagebox.showwarning(
+                "Selection",
+                "Please select one or more objects from the 'Available Objects' list to add."
+            )
+            return
+
+        added_count = 0
+        for i in selected_indices:
+            obj_name = self.available_listbox.get(i)
+            if obj_name not in self.selected_objects:
+                self.selected_objects.add(obj_name)
+                added_count += 1
+
+        if added_count > 0:
+            self.populate_selected_objects()
+            self.filter_available_objects(None)
+            self.update_status(f"Added {added_count} object(s) to export list.")
+
+    def remove_selected_from_export(self):
+        """Removes selected objects from the Selected List"""
+        selected_indices = self.selected_listbox.curselection()
+
+        if not selected_indices:
+            messagebox.showwarning(
+                "Selection",
+                "Please select one or more objects from the 'Selected for Export' list to remove."
+            )
+            return
+
+        removed_objects = []
+        for i in reversed(selected_indices):
+            obj_name = self.selected_listbox.get(i)
+            removed_objects.append(obj_name)
+
+        for obj_name in removed_objects:
+            self.selected_objects.discard(obj_name)
+
+        if removed_objects:
+            self.populate_selected_objects()
+            self.filter_available_objects(None)
+            self.update_status(f"Removed {len(removed_objects)} object(s) from export list.")
+
+    def select_all_available(self):
+        """Selects all objects currently visible in the Available ListBox"""
+        self.available_listbox.select_set(0, END)
+
+    def deselect_all_available(self):
+        """Deselects all objects currently visible in the Available ListBox"""
+        self.available_listbox.select_clear(0, END)
+
+    # ==================================
+    # Run SOQL Action Methods
+    # ==================================
+    def run_soql_action(self):
+        """Handle Run SOQL button click"""
+        if not self.sf_client or not self.soql_runner:
+            messagebox.showerror("Error", "Not logged in. Please log in first.")
+            return
+        
+        # Create SOQL frame if it doesn't exist
+        if self.soql_frame is None:
+            self.soql_frame = SOQLQueryFrame(
+                self,
+                self.soql_runner,
+                status_callback=self.update_status
+            )
+            self.soql_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+            
+            # Connect back button
+            self.soql_frame.back_button.configure(command=self.show_export_frame)
+        
+        # Hide export frame and show SOQL frame
+        self.export_frame.grid_forget()
+        self.soql_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+    
+    def show_export_frame(self):
+        """Show the export frame and hide SOQL frame"""
+        if self.soql_frame:
+            self.soql_frame.grid_forget()
+        self.export_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        
+        
+    # ============================================
+    # salesforce_switch_action
+    # ============================================
+
+    def salesforce_switch_action(self):
+        """Handle Salesforce Switch button click"""
+        if not self.sf_client or not self.metadata_switch_manager:
+            messagebox.showerror("Error", "Not logged in. Please log in first.")
+            return
+        
+        # Create switch frame if it doesn't exist
+        if self.switch_frame is None:
+            self.switch_frame = SalesforceSwitchFrame(
+                self,
+                self.metadata_switch_manager,
+                username=self.username_entry.get(),
+                status_callback=self.update_status
+            )
+            self.switch_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+            
+            # Connect back button
+            self.switch_frame.back_button.configure(command=self.show_export_frame_from_switch)
+        
+        # Hide export frame and show switch frame
+        self.export_frame.grid_forget()
+        self.switch_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        
+        # Load components
+        self.switch_frame.load_components()
+
+
+    # ============================================
+    # show_export_frame_from_switch
+    # ============================================
+
+    def show_export_frame_from_switch(self):
+        """Show the export frame and hide switch frame"""
+        if self.switch_frame:
+            self.switch_frame.grid_forget()
+        self.export_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+
+
+    # ==================================
+    # Export Action Methods
+    # ==================================
+
+    def export_picklist_action(self):
+        """Handle export picklist button click"""
+        if not self.sf_client or not self.picklist_exporter:
+            messagebox.showerror("Error", "Not logged in. Please log in first.")
+            return
+
+        selected_objects_list = sorted(list(self.selected_objects))
+
+        if not selected_objects_list:
+            messagebox.showwarning(
+                "Warning",
+                "The 'Selected for Export' list is empty. Please add objects."
+            )
+            return
+
+        default_filename = DEFAULT_PICKLIST_FILENAME.format(
+            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
+        output_file_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            initialfile=default_filename,
+            filetypes=[("Excel files", "*.xlsx")]
+        )
+
+        if not output_file_path:
+            return
+
+        self.export_picklist_button.configure(state="disabled", text="Exporting... DO NOT CLOSE")
+        self.export_metadata_button.configure(state="disabled")
+        self.download_files_button.configure(state="disabled")
+        self.run_soql_button.configure(state="disabled")
+        self.salesforce_switch_button.configure(state="disabled")
+        self.update_status(
+            f"Starting picklist export for {len(selected_objects_list)} objects to {output_file_path}..."
+        )
+        start_time = time.time()
+
+        # Run export in background thread
+        def do_export():
+            try:
+                output_path, stats = self.picklist_exporter.export_picklists(
+                    selected_objects_list,
+                    output_file_path
+                )
+
+                end_time = time.time()
+                runtime_seconds = end_time - start_time
+                runtime_formatted = format_runtime(runtime_seconds)
+
+                # Update UI on main thread
+                self.after(0, lambda: self._on_picklist_export_success(
+                    output_path, stats, runtime_formatted
+                ))
+
+            except Exception as e:
+                # Handle error on main thread
+                self.after(0, lambda: self._on_picklist_export_error(str(e)))
+
+        ThreadHelper.run_in_thread(do_export)
+
+    def _on_picklist_export_success(self, output_path, stats, runtime_formatted):
+        """Called after successful picklist export"""
+        self.update_status(f"Export Complete! Total Runtime: {runtime_formatted}")
+        messagebox.showinfo(
+            "Export Done",
+            f"Picklist data successfully exported to:\n{output_path}"
+        )
+
+        print_picklist_statistics(stats, runtime_formatted, output_path)
+
+        self.export_picklist_button.configure(state="normal", text="Export Picklist Data")
+        self.export_metadata_button.configure(state="normal")
+        self.download_files_button.configure(state="normal")
+        self.run_soql_button.configure(state="normal")
+        self.salesforce_switch_button.configure(state="normal")
+
+    def _on_picklist_export_error(self, error_message):
+        """Called when picklist export fails"""
+        self.update_status(f"❌ FATAL EXPORT ERROR: {error_message}")
+        messagebox.showerror("Export Error", f"A fatal error occurred during export: {error_message}")
+
+        self.export_picklist_button.configure(state="normal", text="Export Picklist Data")
+        self.export_metadata_button.configure(state="normal")
+        self.download_files_button.configure(state="normal")
+        self.salesforce_switch_button.configure(state="normal") 
+
+    def export_metadata_action(self):
+        """Handle export metadata button click"""
+        if not self.sf_client or not self.metadata_exporter:
+            messagebox.showerror("Error", "Not logged in. Please log in first.")
+            return
+
+        selected_objects_list = sorted(list(self.selected_objects))
+
+        if not selected_objects_list:
+            messagebox.showwarning(
+                "Warning",
+                "The 'Selected for Export' list is empty. Please add objects."
+            )
+            return
+
+        default_filename = DEFAULT_METADATA_FILENAME.format(
+            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
+        output_file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            initialfile=default_filename,
+            filetypes=[("CSV files", "*.csv")]
+        )
+
+        if not output_file_path:
+            return
+
+        self.export_metadata_button.configure(state="disabled", text="Exporting... DO NOT CLOSE")
+        self.export_picklist_button.configure(state="disabled")
+        self.download_files_button.configure(state="disabled")
+        self.run_soql_button.configure(state="disabled")
+
+        self.update_status(
+            f"Starting metadata export for {len(selected_objects_list)} objects to {output_file_path}..."
+        )
+        start_time = time.time()
+
+        # Run export in background thread
+        def do_export():
+            try:
+                output_path, stats = self.metadata_exporter.export_metadata(
+                    selected_objects_list,
+                    output_file_path
+                )
+
+                end_time = time.time()
+                runtime_seconds = end_time - start_time
+                runtime_formatted = format_runtime(runtime_seconds)
+
+                # Update UI on main thread
+                self.after(0, lambda: self._on_metadata_export_success(
+                    output_path, stats, runtime_formatted
+                ))
+
+            except Exception as e:
+                # Handle error on main thread
+                self.after(0, lambda: self._on_metadata_export_error(str(e)))
+
+        ThreadHelper.run_in_thread(do_export)
+
+    def _on_metadata_export_success(self, output_path, stats, runtime_formatted):
+        """Called after successful metadata export"""
+        self.update_status(f"Export Complete! Total Runtime: {runtime_formatted}")
+        messagebox.showinfo(
+            "Export Done",
+            f"Metadata successfully exported to:\n{output_path}"
+        )
+
+        print_metadata_statistics(stats, runtime_formatted, output_path)
+
+        self.export_metadata_button.configure(state="normal", text="Export Metadata")
+        self.export_picklist_button.configure(state="normal")
+        self.download_files_button.configure(state="normal")
+        self.run_soql_button.configure(state="normal")
+
+    def _on_metadata_export_error(self, error_message):
+        """Called when metadata export fails"""
+        self.update_status(f"❌ FATAL EXPORT ERROR: {error_message}")
+        messagebox.showerror("Export Error", f"A fatal error occurred during export: {error_message}")
+
+        self.export_metadata_button.configure(state="normal", text="Export Metadata")
+        self.export_picklist_button.configure(state="normal")
+        self.download_files_button.configure(state="normal")
+
+    def download_files_action(self):
+        """Handle download files button click"""
+        if not self.sf_client or not self.content_document_exporter:
+            messagebox.showerror("Error", "Not logged in. Please log in first.")
+            return
+
+        default_filename = DEFAULT_CONTENTDOCUMENT_FILENAME.format(
+            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
+        output_file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            initialfile=default_filename,
+            filetypes=[("CSV files", "*.csv")]
+        )
+
+        if not output_file_path:
+            return
+
+        self.download_files_button.configure(state="disabled", text="Downloading... DO NOT CLOSE")
+        self.export_picklist_button.configure(state="disabled")
+        self.export_metadata_button.configure(state="disabled")
+        self.run_soql_button.configure(state="disabled")
+
+        self.update_status("Starting ContentDocument export and file downloads...")
+        start_time = time.time()
+
+        # Run export in background thread
+        def do_export():
+            try:
+                output_path, stats = self.content_document_exporter.export_content_documents(
+                    output_file_path
+                )
+
+                end_time = time.time()
+                runtime_seconds = end_time - start_time
+                runtime_formatted = format_runtime(runtime_seconds)
+
+                # Update UI on main thread
+                self.after(0, lambda: self._on_download_files_success(
+                    output_path, stats, runtime_formatted
+                ))
+
+            except Exception as e:
+                # Handle error on main thread
+                self.after(0, lambda: self._on_download_files_error(str(e)))
+
+        ThreadHelper.run_in_thread(do_export)
+
+    def _on_download_files_success(self, output_path, stats, runtime_formatted):
+        """Called after successful file downloads"""
+        self.update_status(f"Export Complete! Total Runtime: {runtime_formatted}")
+
+        # Get documents folder path
+        csv_dir = os.path.dirname(output_path)
+        documents_folder = os.path.join(csv_dir, "Documents")
+
+        messagebox.showinfo(
+            "Export Done",
+            f"ContentDocument data exported to:\n{output_path}\n\nFiles downloaded to:\n{documents_folder}"
+        )
+
+        print_content_document_statistics(stats, runtime_formatted, output_path, documents_folder)
+
+        self.download_files_button.configure(state="normal", text="Download Files")
+        self.export_picklist_button.configure(state="normal")
+        self.export_metadata_button.configure(state="normal")
+        self.run_soql_button.configure(state="normal")
+
+    def _on_download_files_error(self, error_message):
+        """Called when file download fails"""
+        self.update_status(f"❌ FATAL EXPORT ERROR: {error_message}")
+        messagebox.showerror("Export Error", f"A fatal error occurred during export: {error_message}")
+
+        self.download_files_button.configure(state="normal", text="Download Files")
+        self.export_picklist_button.configure(state="normal")
+        self.export_metadata_button.configure(state="normal")
+
+    # ==================================
+    # Utility Methods
+    # ==================================
+
+    def update_status(self, message: str, verbose: bool = False):
+        """Updates the GUI status text box with new messages"""
+        timestamp = datetime.now().strftime("[%H:%M:%S]")
+        display_message = f"{timestamp} {message}"
+
+        self.status_textbox.configure(state="normal")
+        self.status_textbox.insert("end", "\n" + display_message)
+        self.status_textbox.see("end")
+
+        if not verbose:
+            print(display_message)
+
+        self.status_textbox.configure(state="disabled")
+        self.update_idletasks()
+
+    def logout_action(self):
+        """Clears connection, resets state, and returns to the login screen"""
+        confirm = messagebox.askyesno("Logout", "Are you sure you want to log out?")
+        if confirm:
+            self.sf_client = None
+            self.picklist_exporter = None
+            self.metadata_exporter = None
+            self.content_document_exporter = None
+            self.selected_objects.clear()
+            self.all_org_objects.clear()
+            self.soql_runner = None
+            
+            # Clear SOQL frame (existing)
+            if self.soql_frame:
+                self.soql_frame.destroy()
+                self.soql_frame = None
+            
+            # Clear switch frame and manager (NEW)
+            if self.switch_frame:
+                self.switch_frame.destroy()
+                self.switch_frame = None
+            self.metadata_switch_manager = None
+            
+            # Reset the login button state and text
+            self.login_button.configure(state="normal", text="Login to Salesforce")
+            
+            self.update_status("Logged out successfully. Please log in again.")
+            
+            # Switch back to Login Frame
+            self.export_frame.grid_forget()
+            self.login_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+
+
+
+def main():
+    """Main entry point"""
+    try:
+        app = SalesforceExporterGUI()
+        app.mainloop()
+    except Exception as e:
+        print(f"\n❌ GUI Application Failed: {str(e)}")
+        import sys
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

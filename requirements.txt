@@ -1,0 +1,4 @@
+requests
+simple-salesforce
+openpyxl
+customtkinter
