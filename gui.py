@@ -34,6 +34,71 @@ ctk.set_appearance_mode(APPEARANCE_MODE)
 ctk.set_default_color_theme(COLOR_THEME)
 
 
+# gui.py - ADD THIS RIGHT AFTER IMPORTS
+
+class ButtonStateManager:
+    """
+    Centralized manager for all operation buttons.
+    Ensures only one operation can run at a time.
+    """
+    
+    def __init__(self, gui_instance):
+        self.gui = gui_instance
+        self.operation_running = False
+        self.current_operation = None
+        self._buttons = {}
+    
+    def register_buttons(self, buttons_dict):
+        """
+        Register all operation buttons.
+        
+        Args:
+            buttons_dict: {'picklist': btn, 'metadata': btn, ...}
+        """
+        self._buttons = buttons_dict
+    
+    def start_operation(self, operation_name: str) -> bool:
+        """
+        Start an operation. Returns False if another operation is running.
+        """
+        if self.operation_running:
+            messagebox.showwarning(
+                "Operation in Progress",
+                f"Cannot start {operation_name}.\n\n"
+                f"{self.current_operation} is currently running.\n"
+                f"Please wait for it to complete."
+            )
+            return False
+        
+        self.operation_running = True
+        self.current_operation = operation_name
+        
+        # Disable ALL buttons
+        self._set_all_buttons_state("disabled")
+        
+        return True
+    
+    def end_operation(self):
+        """End current operation and re-enable all buttons."""
+        self.operation_running = False
+        self.current_operation = None
+        
+        # Re-enable ALL buttons
+        self._set_all_buttons_state("normal")
+    
+    def _set_all_buttons_state(self, state: str):
+        """Set state for all registered buttons."""
+        for button_name, button_widget in self._buttons.items():
+            try:
+                if button_widget and button_widget.winfo_exists():
+                    button_widget.configure(state=state)
+            except Exception as e:
+                print(f"⚠️ Button state error ({button_name}): {e}")
+
+
+
+
+
 class SalesforceExporterGUI(ctk.CTk):
     """Main GUI application class"""
 
@@ -42,6 +107,9 @@ class SalesforceExporterGUI(ctk.CTk):
 
         self.title(WINDOW_TITLE)
         self.geometry(WINDOW_GEOMETRY)
+        
+        # ✅ CRITICAL: Initialize button_manager FIRST (before _setup_ui)
+        self.button_manager = ButtonStateManager(self)
 
         self.sf_client: Optional[SalesforceClient] = None
         self.picklist_exporter: Optional[PicklistExporter] = None
@@ -74,6 +142,8 @@ class SalesforceExporterGUI(ctk.CTk):
         
         # ✅ NEW - Report Exporter frame
         self.report_exporter_frame = None  # Will be created after login
+        
+
 
     # ==================================
     # Screen 1: Login & Authentication
@@ -333,6 +403,16 @@ class SalesforceExporterGUI(ctk.CTk):
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.report_exporter_button.grid(row=0, column=5, sticky="ew", padx=(5, 0))
+        
+        # ✅ NEW: Register all buttons with state manager (add at END of _setup_export_frame)
+        self.button_manager.register_buttons({
+            'picklist': self.export_picklist_button,
+            'metadata': self.export_metadata_button,
+            'download': self.download_files_button,
+            'soql': self.run_soql_button,
+            'switch': self.salesforce_switch_button,
+            'report': self.report_exporter_button
+        })
 
 
     def _setup_available_objects_panel(self, parent):
@@ -522,10 +602,20 @@ class SalesforceExporterGUI(ctk.CTk):
     # ==================================
     # Run SOQL Action Methods
     # ==================================
+    
     def run_soql_action(self):
         """Handle Run SOQL button click"""
         if not self.sf_client or not self.soql_runner:
             messagebox.showerror("Error", "Not logged in. Please log in first.")
+            return
+        
+        # ✅ NEW: Check if another operation is running
+        if self.button_manager.operation_running:
+            messagebox.showwarning(
+                "Operation in Progress",
+                f"{self.button_manager.current_operation} is currently running.\n\n"
+                f"Please wait for it to complete before opening SOQL runner."
+            )
             return
         
         # Create SOQL frame if it doesn't exist
@@ -561,6 +651,15 @@ class SalesforceExporterGUI(ctk.CTk):
             messagebox.showerror("Error", "Not logged in. Please log in first.")
             return
         
+        # ✅ NEW: Check if another operation is running
+        if self.button_manager.operation_running:
+            messagebox.showwarning(
+                "Operation in Progress",
+                f"{self.button_manager.current_operation} is currently running.\n\n"
+                f"Please wait for it to complete before opening Salesforce Switch."
+            )
+            return
+        
         # Create switch frame if it doesn't exist
         if self.switch_frame is None:
             self.switch_frame = SalesforceSwitchFrame(
@@ -586,11 +685,180 @@ class SalesforceExporterGUI(ctk.CTk):
     # show_export_frame_from_switch
     # ============================================
 
+
+
     def show_export_frame_from_switch(self):
         """Show the export frame and hide switch frame"""
         if self.switch_frame:
             self.switch_frame.grid_forget()
         self.export_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        
+        
+    def _get_window_monitor_geometry(self) -> tuple:
+        """
+        Get the geometry of the monitor where this window is currently displayed.
+        
+        Returns:
+            (x, y, width, height) of the monitor containing this window
+        """
+        try:
+            # Get main window position and size
+            window_x = self.winfo_x()
+            window_y = self.winfo_y()
+            window_width = self.winfo_width()
+            window_height = self.winfo_height()
+            
+            # Calculate window center point
+            window_center_x = window_x + (window_width // 2)
+            window_center_y = window_y + (window_height // 2)
+            
+            # Get screen dimensions
+            screen_width = self.winfo_screenwidth()
+            screen_height = self.winfo_screenheight()
+            
+            # Detect which monitor the window is on
+            # Simple heuristic for multi-monitor setups
+            
+            if window_center_x > screen_width:
+                # Window is on RIGHT monitor (extended display)
+                monitor_x = screen_width
+                monitor_y = 0
+                monitor_width = screen_width  # Assume same size as primary
+                monitor_height = screen_height
+            elif window_center_x < 0:
+                # Window is on LEFT monitor
+                monitor_x = -screen_width
+                monitor_y = 0
+                monitor_width = screen_width
+                monitor_height = screen_height
+            elif window_center_y < 0:
+                # Window is on TOP monitor (stacked setup)
+                monitor_x = 0
+                monitor_y = -screen_height
+                monitor_width = screen_width
+                monitor_height = screen_height
+            elif window_center_y > screen_height:
+                # Window is on BOTTOM monitor
+                monitor_x = 0
+                monitor_y = screen_height
+                monitor_width = screen_width
+                monitor_height = screen_height
+            else:
+                # Window is on PRIMARY monitor
+                monitor_x = 0
+                monitor_y = 0
+                monitor_width = screen_width
+                monitor_height = screen_height
+            
+            return (monitor_x, monitor_y, monitor_width, monitor_height)
+            
+        except Exception as e:
+            print(f"⚠️ Error detecting monitor: {e}")
+            # Fallback to primary monitor
+            return (0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
+    
+    def _get_window_state_info(self) -> dict:
+        """
+        Get current window state and geometry information.
+        
+        Returns:
+            Dictionary with window state info:
+            {
+                'state': 'normal' | 'zoomed' | 'fullscreen',
+                'width': int,
+                'height': int,
+                'x': int,
+                'y': int,
+                'monitor_x': int,
+                'monitor_y': int,
+                'monitor_width': int,
+                'monitor_height': int
+            }
+        """
+        try:
+            # Get window state
+            state = self.state()
+            
+            # Check if zoomed (maximized)
+            is_zoomed = (state == 'zoomed')
+            
+            # Check if fullscreen (on some systems)
+            is_fullscreen = self.attributes('-fullscreen') if hasattr(self, 'attributes') else False
+            
+            # Determine state string
+            if is_fullscreen:
+                state_str = 'fullscreen'
+            elif is_zoomed:
+                state_str = 'zoomed'
+            else:
+                state_str = 'normal'
+            
+            # Get window geometry
+            width = self.winfo_width()
+            height = self.winfo_height()
+            x = self.winfo_x()
+            y = self.winfo_y()
+            
+            # Get monitor geometry
+            monitor_x, monitor_y, monitor_width, monitor_height = self._get_window_monitor_geometry()
+            
+            return {
+                'state': state_str,
+                'width': width,
+                'height': height,
+                'x': x,
+                'y': y,
+                'monitor_x': monitor_x,
+                'monitor_y': monitor_y,
+                'monitor_width': monitor_width,
+                'monitor_height': monitor_height
+            }
+            
+        except Exception as e:
+            print(f"⚠️ Error getting window state: {e}")
+            # Fallback to defaults
+            return {
+                'state': 'normal',
+                'width': 1200,
+                'height': 800,
+                'x': 100,
+                'y': 100,
+                'monitor_x': 0,
+                'monitor_y': 0,
+                'monitor_width': self.winfo_screenwidth(),
+                'monitor_height': self.winfo_screenheight()
+            }
+    
+    def _center_window_on_monitor(self, window, window_width: int, window_height: int, 
+                                   monitor_x: int, monitor_y: int, 
+                                   monitor_width: int, monitor_height: int):
+        """
+        Center a window on a specific monitor.
+        
+        Args:
+            window: The window to center
+            window_width: Desired window width
+            window_height: Desired window height
+            monitor_x: Monitor X offset
+            monitor_y: Monitor Y offset
+            monitor_width: Monitor width
+            monitor_height: Monitor height
+        """
+        try:
+            # Calculate center position on the monitor
+            center_x = monitor_x + (monitor_width - window_width) // 2
+            center_y = monitor_y + (monitor_height - window_height) // 2
+            
+            # Set geometry
+            window.geometry(f"{window_width}x{window_height}+{center_x}+{center_y}")
+            
+        except Exception as e:
+            print(f"⚠️ Error centering window: {e}")
+            # Fallback to default positioning
+            window.geometry(f"{window_width}x{window_height}")       
+
+
+
     
     # ✅ NEW METHOD 1 - Report Exporter Action
     def report_exporter_action(self):
@@ -625,6 +893,70 @@ class SalesforceExporterGUI(ctk.CTk):
         self.withdraw()
         
         self._log("📊 Opened Report Exporter")
+    
+    
+    def _apply_parent_state_to_child(self, child_window, parent_state: dict):
+        """
+        Apply parent window's state (position, size, fullscreen) to child window.
+        
+        Args:
+            child_window: The child Toplevel window
+            parent_state: Dictionary from _get_window_state_info()
+        """
+        try:
+            state = parent_state['state']
+            
+            if state == 'fullscreen':
+                # Parent is fullscreen - make child fullscreen too
+                child_window.attributes('-fullscreen', True)
+                self._log("🖥️ Report Exporter: Fullscreen mode")
+                
+            elif state == 'zoomed':
+                # Parent is maximized - maximize child
+                child_window.state('zoomed')
+                self._log("🖥️ Report Exporter: Maximized mode")
+                
+            else:
+                # Parent is normal - match parent's size and center on same monitor
+                width = parent_state['width']
+                height = parent_state['height']
+                monitor_x = parent_state['monitor_x']
+                monitor_y = parent_state['monitor_y']
+                monitor_width = parent_state['monitor_width']
+                monitor_height = parent_state['monitor_height']
+                
+                # Use 90% of parent size (looks better than exact match)
+                child_width = int(width * 0.9)
+                child_height = int(height * 0.9)
+                
+                # Ensure minimum size
+                child_width = max(child_width, 1000)
+                child_height = max(child_height, 700)
+                
+                # Center on same monitor as parent
+                self._center_window_on_monitor(
+                    child_window,
+                    child_width,
+                    child_height,
+                    monitor_x,
+                    monitor_y,
+                    monitor_width,
+                    monitor_height
+                )
+                
+                self._log(f"🖥️ Report Exporter: Normal mode ({child_width}x{child_height})")
+            
+            # Force window to update
+            child_window.update_idletasks()
+            
+        except Exception as e:
+            print(f"⚠️ Error applying parent state to child: {e}")
+            # Fallback to default size and position
+            try:
+                child_window.geometry("1200x740")
+            except:
+                pass    
+    
     
     # ✅ NEW METHOD 2 - Back from Report Exporter
     def show_export_frame_from_report_exporter(self):
@@ -671,6 +1003,10 @@ class SalesforceExporterGUI(ctk.CTk):
             )
             return
 
+        # ✅ NEW: Check if another operation is running
+        if not self.button_manager.start_operation("Picklist Export"):
+            return
+
         default_filename = DEFAULT_PICKLIST_FILENAME.format(
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
         )
@@ -681,13 +1017,17 @@ class SalesforceExporterGUI(ctk.CTk):
         )
 
         if not output_file_path:
+            # ✅ NEW: User cancelled, end operation
+            self.button_manager.end_operation()
             return
 
-        self.export_picklist_button.configure(state="disabled", text="Exporting... DO NOT CLOSE")
-        self.export_metadata_button.configure(state="disabled")
-        self.download_files_button.configure(state="disabled")
-        self.run_soql_button.configure(state="disabled")
-        self.salesforce_switch_button.configure(state="disabled")
+        # ✅ REMOVE OLD CODE: Delete these lines if they exist:
+        # self.export_picklist_button.configure(state="disabled", text="Exporting... DO NOT CLOSE")
+        # self.export_metadata_button.configure(state="disabled")
+        # self.download_files_button.configure(state="disabled")
+        # self.run_soql_button.configure(state="disabled")
+        # self.salesforce_switch_button.configure(state="disabled")
+
         self.update_status(
             f"Starting picklist export for {len(selected_objects_list)} objects to {output_file_path}..."
         )
@@ -726,21 +1066,29 @@ class SalesforceExporterGUI(ctk.CTk):
 
         print_picklist_statistics(stats, runtime_formatted, output_path)
 
-        self.export_picklist_button.configure(state="normal", text="Export Picklist Data")
-        self.export_metadata_button.configure(state="normal")
-        self.download_files_button.configure(state="normal")
-        self.run_soql_button.configure(state="normal")
-        self.salesforce_switch_button.configure(state="normal")
+        # ✅ NEW: Re-enable all buttons
+        self.button_manager.end_operation()
+
+        # ✅ REMOVE OLD CODE: Delete these lines if they exist:
+        # self.export_picklist_button.configure(state="normal", text="Export Picklist Data")
+        # self.export_metadata_button.configure(state="normal")
+        # self.download_files_button.configure(state="normal")
+        # self.run_soql_button.configure(state="normal")
+        # self.salesforce_switch_button.configure(state="normal")
 
     def _on_picklist_export_error(self, error_message):
         """Called when picklist export fails"""
         self.update_status(f"❌ FATAL EXPORT ERROR: {error_message}")
         messagebox.showerror("Export Error", f"A fatal error occurred during export: {error_message}")
 
-        self.export_picklist_button.configure(state="normal", text="Export Picklist Data")
-        self.export_metadata_button.configure(state="normal")
-        self.download_files_button.configure(state="normal")
-        self.salesforce_switch_button.configure(state="normal") 
+        # ✅ NEW: Re-enable all buttons
+        self.button_manager.end_operation()
+
+        # ✅ REMOVE OLD CODE: Delete these lines if they exist:
+        # self.export_picklist_button.configure(state="normal", text="Export Picklist Data")
+        # self.export_metadata_button.configure(state="normal")
+        # self.download_files_button.configure(state="normal")
+        # self.salesforce_switch_button.configure(state="normal")
 
     def export_metadata_action(self):
         """Handle export metadata button click"""
@@ -757,6 +1105,10 @@ class SalesforceExporterGUI(ctk.CTk):
             )
             return
 
+        # ✅ NEW: Check if another operation is running
+        if not self.button_manager.start_operation("Metadata Export"):
+            return
+
         default_filename = DEFAULT_METADATA_FILENAME.format(
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
         )
@@ -767,12 +1119,11 @@ class SalesforceExporterGUI(ctk.CTk):
         )
 
         if not output_file_path:
+            # ✅ NEW: User cancelled, end operation
+            self.button_manager.end_operation()
             return
 
-        self.export_metadata_button.configure(state="disabled", text="Exporting... DO NOT CLOSE")
-        self.export_picklist_button.configure(state="disabled")
-        self.download_files_button.configure(state="disabled")
-        self.run_soql_button.configure(state="disabled")
+        # ✅ REMOVE OLD CODE: Delete button disable lines
 
         self.update_status(
             f"Starting metadata export for {len(selected_objects_list)} objects to {output_file_path}..."
@@ -812,24 +1163,25 @@ class SalesforceExporterGUI(ctk.CTk):
 
         print_metadata_statistics(stats, runtime_formatted, output_path)
 
-        self.export_metadata_button.configure(state="normal", text="Export Metadata")
-        self.export_picklist_button.configure(state="normal")
-        self.download_files_button.configure(state="normal")
-        self.run_soql_button.configure(state="normal")
+        # ✅ NEW: Re-enable all buttons
+        self.button_manager.end_operation()
 
     def _on_metadata_export_error(self, error_message):
         """Called when metadata export fails"""
         self.update_status(f"❌ FATAL EXPORT ERROR: {error_message}")
         messagebox.showerror("Export Error", f"A fatal error occurred during export: {error_message}")
 
-        self.export_metadata_button.configure(state="normal", text="Export Metadata")
-        self.export_picklist_button.configure(state="normal")
-        self.download_files_button.configure(state="normal")
+        # ✅ NEW: Re-enable all buttons
+        self.button_manager.end_operation()
 
     def download_files_action(self):
         """Handle download files button click"""
         if not self.sf_client or not self.content_document_exporter:
             messagebox.showerror("Error", "Not logged in. Please log in first.")
+            return
+
+        # ✅ NEW: Check if another operation is running
+        if not self.button_manager.start_operation("File Download"):
             return
 
         default_filename = DEFAULT_CONTENTDOCUMENT_FILENAME.format(
@@ -842,12 +1194,15 @@ class SalesforceExporterGUI(ctk.CTk):
         )
 
         if not output_file_path:
+            # ✅ NEW: User cancelled, end operation
+            self.button_manager.end_operation()
             return
 
-        self.download_files_button.configure(state="disabled", text="Downloading... DO NOT CLOSE")
-        self.export_picklist_button.configure(state="disabled")
-        self.export_metadata_button.configure(state="disabled")
-        self.run_soql_button.configure(state="disabled")
+        # ✅ REMOVE OLD CODE: Delete these lines if they exist:
+        # self.download_files_button.configure(state="disabled", text="Downloading... DO NOT CLOSE")
+        # self.export_picklist_button.configure(state="disabled")
+        # self.export_metadata_button.configure(state="disabled")
+        # self.run_soql_button.configure(state="disabled")
 
         self.update_status("Starting ContentDocument export and file downloads...")
         start_time = time.time()
@@ -889,19 +1244,20 @@ class SalesforceExporterGUI(ctk.CTk):
 
         print_content_document_statistics(stats, runtime_formatted, output_path, documents_folder)
 
-        self.download_files_button.configure(state="normal", text="Download Files")
-        self.export_picklist_button.configure(state="normal")
-        self.export_metadata_button.configure(state="normal")
-        self.run_soql_button.configure(state="normal")
+        # ✅ NEW: Re-enable all buttons
+        self.button_manager.end_operation()
+
+        # ✅ REMOVE OLD CODE: Delete button re-enable lines
 
     def _on_download_files_error(self, error_message):
         """Called when file download fails"""
         self.update_status(f"❌ FATAL EXPORT ERROR: {error_message}")
         messagebox.showerror("Export Error", f"A fatal error occurred during export: {error_message}")
 
-        self.download_files_button.configure(state="normal", text="Download Files")
-        self.export_picklist_button.configure(state="normal")
-        self.export_metadata_button.configure(state="normal")
+        # ✅ NEW: Re-enable all buttons
+        self.button_manager.end_operation()
+
+        # ✅ REMOVE OLD CODE: Delete button re-enable lines
 
     # ==================================
     # Utility Methods

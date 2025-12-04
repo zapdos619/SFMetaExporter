@@ -407,8 +407,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         """
         Handle window close event.
         
-        KEY FIX: Calls logout instead of directly destroying.
-        This ensures proper cleanup through the parent.
+        ✅ FIXED: Now behaves like Back button (return to parent, no logout)
         """
         if self._is_ui_busy():
             result = messagebox.askyesno(
@@ -433,16 +432,16 @@ class SalesforceExporterApp(ctk.CTkToplevel):
     
     def _force_close(self):
         """
-        Force close the window.
+        Force close the window and return to parent.
         
-        Called after operations are cancelled or if no operations running.
+        ✅ FIXED: Same behavior as Back button (no logout)
         """
         try:
             self.grab_release()
         except:
             pass
         
-        # If we have a logout callback, use it (proper flow)
+        # If we have a back callback, use it (proper flow)
         if self.on_logout_callback:
             try:
                 self.on_logout_callback()
@@ -455,6 +454,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             self.destroy()
         except:
             pass
+    
     
     def _on_window_configure(self, event=None):
         """
@@ -629,11 +629,12 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             left_frame,
             text="Select folders and reports to export • F5 to refresh • Ctrl+E to export • ESC to cancel",
             font=ctk.CTkFont(size=11),
-            text_color="gray"
+            text_color="gray",
+            justify="center"
         )
         self.subtitle_label.pack(anchor="w", pady=(3, 0))
         
-        # Right side - Login status and logout button
+        # Right side - Login status and refresh button (NO LOGOUT)
         right_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
         right_frame.pack(side="right", padx=20, pady=10)
 
@@ -654,13 +655,9 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         )
         self.status_label.pack(pady=(0, 5))
 
-        # Button container for refresh + logout (far right positioning)
-        button_container = ctk.CTkFrame(right_frame, fg_color="transparent")
-        button_container.pack()
-
-        # Refresh button
+        # ✅ ONLY Refresh button (logout button REMOVED)
         self.refresh_button = ctk.CTkButton(
-            button_container,
+            right_frame,
             text="🔄 Refresh",
             command=self._on_refresh_clicked,
             width=120,
@@ -669,20 +666,9 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             hover_color="#144870",
             font=ctk.CTkFont(size=11, weight="bold")
         )
-        self.refresh_button.pack(side="left", padx=(0, 5))
+        self.refresh_button.pack()
         self.refresh_button.configure(state="disabled")
 
-        # Logout button (far right)
-        self.logout_button = ctk.CTkButton(
-            button_container,
-            text="Logout",
-            command=self._logout,
-            width=120,
-            height=32,
-            fg_color="#d32f2f",
-            hover_color="#9a2222"
-        )
-        self.logout_button.pack(side="left")
 
     
     def _create_main_content(self):
@@ -1177,105 +1163,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         self.log_textbox.delete("1.0", "end")
         self.log_textbox.configure(state="disabled")
     
-    # ===== LOGIN OPERATIONS =====
-    
-    def _logout(self):
-        """Logout and return to login window - WORKS DURING LOADING"""
-        
-        # Check if busy
-        if self._is_ui_busy():
-            # ✅ Better message based on what's happening
-            if self.is_loading:
-                message = "Search is in progress. Cancel search and logout?"
-            elif self.is_exporting:
-                message = "Export is in progress. Cancel export and logout?"
-            else:
-                message = "An operation is in progress. Cancel and logout?"
-            
-            result = messagebox.askyesno(
-                "Operation in Progress",
-                message,
-                icon='warning'
-            )
-            
-            if not result:
-                return
-            
-            # ✅ Set cancel event to stop loading/exporting
-            self._log("🛑 Cancelling operations for logout...")
-            self.export_cancel_event.set()
-            
-            # ✅ Give threads 500ms to see the cancel event, then force logout
-            self.after(500, self._force_logout_after_cancel)
-            return
-        
-        # Normal logout (no operations running)
-        result = messagebox.askyesno(
-            "Confirm Logout",
-            "Are you sure you want to logout?\n\nYou will return to the login screen.",
-            icon='question'
-        )
-        
-        if not result:
-            return
-        
-        self._log("🔴 Logging out...")
-        
-        # Release grab before calling parent callback
-        try:
-            self.grab_release()
-        except:
-            pass
-        
-        # Call parent's logout handler
-        if self.on_logout_callback:
-            try:
-                self.on_logout_callback()
-            except Exception as e:
-                print(f"⚠️ Error in logout callback: {e}")
-                try:
-                    self.destroy()
-                except:
-                    pass
-        else:
-            try:
-                self.destroy()
-            except:
-                pass
 
-    def _force_logout_after_cancel(self):
-        """Force logout after cancelling operations"""
-        self._log("🔴 Logging out...")
-        
-        # Reset states
-        self._set_ui_state("idle")
-        self.is_loading = False
-        self.is_exporting = False
-        
-        # ✅ NEW: Reset search state
-        self.last_search_keyword = None
-        self.search_cache.clear()
-        
-        try:
-            self.grab_release()
-        except:
-            pass
-        
-        if self.on_logout_callback:
-            try:
-                self.on_logout_callback()
-            except Exception as e:
-                print(f"⚠️ Error in logout callback: {e}")
-                try:
-                    self.destroy()
-                except:
-                    pass
-        else:
-            try:
-                self.destroy()
-            except:
-                pass
-    
     # ===== LOAD FOLDERS AND REPORTS =====
     
     def _show_welcome_message(self):
