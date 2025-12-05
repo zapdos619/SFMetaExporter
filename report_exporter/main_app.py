@@ -137,6 +137,9 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         """Initialize with improved state management"""
         super().__init__(master)
         
+        # ✅ CRITICAL: Initialize _log method FIRST (before anything else)
+        self._log_buffer = []  # Buffer for early log messages
+        
         # Store session info and logout callback
         self.session_info = session_info
         self.on_logout_callback = on_logout
@@ -149,7 +152,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         # ✅ NEW: Search results cache
         self.search_cache: Dict[str, Dict] = {}  
-        self.search_cache_max_size = 10  # Keep last 10 searches
+        self.search_cache_max_size = 10
         
         # Thread Safety - Initialize locks early
         self.data_lock = threading.RLock()
@@ -168,7 +171,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         if master and master.winfo_exists():
             try:
-                master.withdraw()  # Hide the empty root window
+                master.withdraw()
             except:
                 pass
         
@@ -193,7 +196,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         # ✅ NEW: Virtual tree view instance
         self.virtual_tree: Optional[VirtualTreeView] = None
-        self.tree_items: Dict[str, Dict] = {}  # Keep for compatibility
+        self.tree_items: Dict[str, Dict] = {}
         
         # Progress tracker
         self.progress_tracker = ExportProgressTracker()
@@ -201,19 +204,19 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         # Queue for thread-safe UI updates
         self.update_queue = queue.Queue()
         
-        # Window configuration tracking (initialize before binding)
+        # Window configuration tracking
         self._configure_timer = None
         self._last_window_geometry = None
         self._last_export_state = None
         
-        # ✅ NEW: Destruction flag (prevents operations during shutdown)
+        # ✅ NEW: Destruction flag
         self._is_being_destroyed = False
         
-        # Setup UI
+        # ✅ IMPORTANT: Setup UI BEFORE starting queue processor
         self._setup_ui()
         
-        # Optional: Enable debug mode
-        # self._enable_debug_mode()
+        # ✅ NOW the log textbox exists, flush buffered messages
+        self._flush_log_buffer()
         
         # Center window on screen
         self.after(100, self._center_window)
@@ -228,12 +231,12 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         # Keyboard shortcuts
         self.unbind('<Control-e>')
         self.unbind('<Escape>')
-        self.unbind('<F5>')  # ✅ NEW: Unbind F5 if previously bound
+        self.unbind('<F5>')
         self.bind('<Control-e>', lambda e: self._start_export_safe())
         self.bind('<Escape>', lambda e: self._cancel_export_safe())
-        self.bind('<F5>', lambda e: self._on_refresh_clicked())  # ✅ NEW: F5 to refresh
+        self.bind('<F5>', lambda e: self._on_refresh_clicked())
         
-        # Window configuration tracking (bind AFTER attributes are initialized)
+        # Window configuration tracking
         self.bind('<Configure>', self._on_window_configure)
         
         # ✅ Mark as initialized
@@ -241,6 +244,61 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         # Auto-load data after UI is ready
         self.after(500, self._show_welcome_message)
+    
+    def _log(self, message: str):
+        """
+        Add message to log.
+        ✅ FIXED: Safe to call even before UI is ready.
+        """
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        log_msg = f"[{timestamp}] {message}\n"
+        
+        # ✅ Check if log textbox exists yet
+        if not hasattr(self, 'log_textbox') or not self.log_textbox.winfo_exists():
+            # Buffer the message for later
+            if hasattr(self, '_log_buffer'):
+                self._log_buffer.append(log_msg)
+            return
+        
+        try:
+            self.log_textbox.configure(state="normal")
+            self.log_textbox.insert("end", log_msg)
+            self.log_textbox.see("end")
+            self.log_textbox.configure(state="disabled")
+        except Exception as e:
+            print(f"⚠️ Log error: {e}")
+            # Fallback to console
+            print(log_msg.strip())
+
+    def _flush_log_buffer(self):
+        """
+        Flush buffered log messages to the textbox.
+        ✅ NEW: Called after UI is ready.
+        """
+        if not hasattr(self, '_log_buffer'):
+            return
+        
+        if not self._log_buffer:
+            return
+        
+        if not hasattr(self, 'log_textbox') or not self.log_textbox.winfo_exists():
+            return
+        
+        try:
+            self.log_textbox.configure(state="normal")
+            for msg in self._log_buffer:
+                self.log_textbox.insert("end", msg)
+            self.log_textbox.see("end")
+            self.log_textbox.configure(state="disabled")
+            
+            # Clear buffer
+            self._log_buffer.clear()
+            
+            print(f"✅ Flushed {len(self._log_buffer)} buffered log messages")
+        except Exception as e:
+            print(f"⚠️ Error flushing log buffer: {e}")    
+    
+    
         
     
     def _cancel_export_safe(self):
@@ -464,7 +522,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         ✅ IMPROVED: Better safety checks and early bailout
         """
         # ✅ SAFETY: Ignore if being destroyed
-        if self._is_being_destroyed:
+        if hasattr(self, '_is_being_destroyed') and self._is_being_destroyed:
             return
         
         # ✅ SAFETY: Ignore if not initialized
@@ -475,9 +533,11 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         if event and event.widget != self:
             return
         
-        # ✅ SAFETY: Check if attributes exist (early window events can fire before init completes)
-        if not hasattr(self, 'is_exporting') or not hasattr(self, '_configure_timer'):
-            return
+        # ✅ SAFETY: Check if attributes exist
+        required_attrs = ['is_exporting', '_configure_timer', 'ui_lock']
+        for attr in required_attrs:
+            if not hasattr(self, attr):
+                return
         
         # ✅ Cancel any pending configure updates (debouncing)
         if self._configure_timer:
@@ -502,7 +562,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         ✅ IMPROVED: More safety checks
         """
         # ✅ SAFETY: Ignore if being destroyed
-        if self._is_being_destroyed:
+        if hasattr(self, '_is_being_destroyed') and self._is_being_destroyed:
             return
         
         try:
@@ -534,8 +594,21 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         This is the SINGLE SOURCE OF TRUTH for button visibility.
         Thread-safe and handles all edge cases.
         
-        IMPROVED: Uses atomic state management to prevent race conditions.
+        ✅ IMPROVED: Better error handling and existence checks.
         """
+        # ✅ SAFETY: Check if widgets exist
+        if not hasattr(self, 'export_button') or not hasattr(self, 'cancel_button'):
+            print("⚠️ Export/Cancel buttons not initialized yet")
+            return
+        
+        try:
+            if not self.export_button.winfo_exists() or not self.cancel_button.winfo_exists():
+                print("⚠️ Export/Cancel buttons destroyed")
+                return
+        except:
+            print("⚠️ Cannot check button existence")
+            return
+        
         # ✅ CRITICAL: Read state atomically
         export_state = self._get_export_state()
         is_cancelling = self.export_cancel_event.is_set()
@@ -561,7 +634,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                     )
                 
                 # Show cancel button
-                self.cancel_button.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
+                self.cancel_button.grid(row=0, column=0, sticky="ew")
                 self.cancel_button.lift()
                 
                 # Hide export button
@@ -571,7 +644,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 # ===== IDLE or CANCELLING: Show EXPORT button =====
                 
                 # Show export button FIRST (no gap)
-                self.export_button.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
+                self.export_button.grid(row=0, column=0, sticky="ew")
                 self.export_button.lift()
                 
                 # Hide cancel button
@@ -589,6 +662,8 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             
         except Exception as e:
             print(f"⚠️ Button visibility error: {e}")
+            import traceback
+            traceback.print_exc()
             
     def _create_header(self):
         """Create header section with title and login status"""
@@ -2790,8 +2865,8 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         # ✅ Start export in BACKGROUND THREAD (UI stays responsive)
         thread = threading.Thread(
-            target=self._export_worker,
-            args=(report_ids, selected_format),  # ✅ NEW: Pass format to worker
+            target=self._export_worker_safe,  # ← CHANGED: Use safe wrapper
+            args=(report_ids, selected_format),
             daemon=True,
             name=f"ExportThread-{selected_format}"
         )
@@ -2823,7 +2898,35 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         # All checks passed - proceed with export
         self._start_export()
 
+    def _export_worker_safe(self, report_ids: List[str], export_format: str = "csv"):
+        """
+        Safe wrapper for _export_worker that prevents crashes.
         
+        ✅ NEW: Ensures all exceptions are caught and handled gracefully.
+        """
+        try:
+            self._export_worker(report_ids, export_format)
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            
+            # Log full error to console
+            print(f"❌ EXPORT WORKER CRASH:")
+            print(error_details)
+            
+            # Queue error message to UI
+            error_msg = f"Export worker crashed: {str(e)}"
+            self.update_queue.put(("log", f"❌ {error_msg}"))
+            self.update_queue.put(("export_error", error_msg))
+        finally:
+            # ✅ CRITICAL: Always reset state, even on crash
+            try:
+                with self.state_lock:
+                    if self._export_state == "running":
+                        self._set_export_state("idle")
+            except:
+                pass
+         
     def _export_worker(self, report_ids: List[str], export_format: str = "csv"):
         """
         Background worker for export with concurrent downloads.
@@ -3546,13 +3649,16 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         self._log("🐛 Debug mode enabled - Press Ctrl+D to print state")
 
 
-
     def _process_queue(self):
         """
         Process updates from background threads.
         
         ✅ FIXED: Better error handling for each event type
         """
+        # ✅ SAFETY: Check if window still exists
+        if not self._is_window_alive():
+            return
+        
         try:
             # Process all queued items (up to 10 per cycle to prevent blocking)
             processed = 0
@@ -3600,6 +3706,11 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                     elif event_type == "log":
                         self._log(data)
                         
+                    elif event_type == "ui_update":
+                        # ✅ NEW: Handle generic UI updates
+                        callback, args, kwargs = data
+                        callback(*args, **kwargs)
+                        
                     else:
                         print(f"⚠️ Unknown event type: {event_type}")
                         
@@ -3615,9 +3726,28 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         # Schedule next check (100ms interval)
         try:
-            self.after(100, self._process_queue)
+            if self._is_window_alive():
+                self.after(100, self._process_queue)
         except Exception as e:
             print(f"❌ Cannot schedule queue processor: {e}")
+
+    def _is_window_alive(self) -> bool:
+        """
+        Check if window still exists and is usable.
+        
+        ✅ NEW: Prevents operations on destroyed windows
+        
+        Returns:
+            True if window is alive, False otherwise
+        """
+        if hasattr(self, '_is_being_destroyed') and self._is_being_destroyed:
+            return False
+        
+        try:
+            # Try to access a basic window property
+            return self.winfo_exists()
+        except:
+            return False
             
     
     def _on_back_clicked(self):

@@ -693,7 +693,6 @@ class SalesforceExporterGUI(ctk.CTk):
             self.switch_frame.grid_forget()
         self.export_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
         
-        
     def _get_window_monitor_geometry(self) -> tuple:
         """
         Get the geometry of the monitor where this window is currently displayed.
@@ -717,13 +716,11 @@ class SalesforceExporterGUI(ctk.CTk):
             screen_height = self.winfo_screenheight()
             
             # Detect which monitor the window is on
-            # Simple heuristic for multi-monitor setups
-            
             if window_center_x > screen_width:
                 # Window is on RIGHT monitor (extended display)
                 monitor_x = screen_width
                 monitor_y = 0
-                monitor_width = screen_width  # Assume same size as primary
+                monitor_width = screen_width
                 monitor_height = screen_height
             elif window_center_x < 0:
                 # Window is on LEFT monitor
@@ -756,24 +753,13 @@ class SalesforceExporterGUI(ctk.CTk):
             print(f"⚠️ Error detecting monitor: {e}")
             # Fallback to primary monitor
             return (0, 0, self.winfo_screenwidth(), self.winfo_screenheight())
-    
+
     def _get_window_state_info(self) -> dict:
         """
         Get current window state and geometry information.
         
         Returns:
-            Dictionary with window state info:
-            {
-                'state': 'normal' | 'zoomed' | 'fullscreen',
-                'width': int,
-                'height': int,
-                'x': int,
-                'y': int,
-                'monitor_x': int,
-                'monitor_y': int,
-                'monitor_width': int,
-                'monitor_height': int
-            }
+            Dictionary with window state info
         """
         try:
             # Get window state
@@ -782,8 +768,11 @@ class SalesforceExporterGUI(ctk.CTk):
             # Check if zoomed (maximized)
             is_zoomed = (state == 'zoomed')
             
-            # Check if fullscreen (on some systems)
-            is_fullscreen = self.attributes('-fullscreen') if hasattr(self, 'attributes') else False
+            # Check if fullscreen
+            try:
+                is_fullscreen = self.attributes('-fullscreen')
+            except:
+                is_fullscreen = False
             
             # Determine state string
             if is_fullscreen:
@@ -828,10 +817,10 @@ class SalesforceExporterGUI(ctk.CTk):
                 'monitor_width': self.winfo_screenwidth(),
                 'monitor_height': self.winfo_screenheight()
             }
-    
+
     def _center_window_on_monitor(self, window, window_width: int, window_height: int, 
-                                   monitor_x: int, monitor_y: int, 
-                                   monitor_width: int, monitor_height: int):
+                                monitor_x: int, monitor_y: int, 
+                                monitor_width: int, monitor_height: int):
         """
         Center a window on a specific monitor.
         
@@ -855,46 +844,8 @@ class SalesforceExporterGUI(ctk.CTk):
         except Exception as e:
             print(f"⚠️ Error centering window: {e}")
             # Fallback to default positioning
-            window.geometry(f"{window_width}x{window_height}")       
+            window.geometry(f"{window_width}x{window_height}")
 
-
-
-    
-    # ✅ NEW METHOD 1 - Report Exporter Action
-    def report_exporter_action(self):
-        """Handle Report Exporter button click (6th button)"""
-        if not self.sf_client:
-            messagebox.showerror("Error", "Not logged in. Please log in first.")
-            return
-        
-        # Build session info for Report Exporter
-        session_info = {
-            "session_id": self.sf_client.session_id,
-            "instance_url": self.sf_client.base_url,
-            "api_version": self.sf_client.api_version,
-            "user_name": self.username_entry.get()  # Get from login
-        }
-        
-        # ✅ FIXED: Create or show the Toplevel window
-        if self.report_exporter_frame is None or not self.report_exporter_frame.winfo_exists():
-            # Create new window
-            self.report_exporter_frame = SalesforceExporterApp(
-                master=self,
-                session_info=session_info,
-                on_logout=self.show_export_frame_from_report_exporter
-            )
-        else:
-            # Window already exists, just show it
-            self.report_exporter_frame.deiconify()
-            self.report_exporter_frame.lift()
-            self.report_exporter_frame.focus_force()
-        
-        # ✅ FIXED: Hide main window (not grid_forget)
-        self.withdraw()
-        
-        self._log("📊 Opened Report Exporter")
-    
-    
     def _apply_parent_state_to_child(self, child_window, parent_state: dict):
         """
         Apply parent window's state (position, size, fullscreen) to child window.
@@ -908,13 +859,19 @@ class SalesforceExporterGUI(ctk.CTk):
             
             if state == 'fullscreen':
                 # Parent is fullscreen - make child fullscreen too
-                child_window.attributes('-fullscreen', True)
-                self._log("🖥️ Report Exporter: Fullscreen mode")
+                try:
+                    child_window.attributes('-fullscreen', True)
+                    print("🖥️ Report Exporter: Fullscreen mode")
+                except:
+                    pass
                 
             elif state == 'zoomed':
                 # Parent is maximized - maximize child
-                child_window.state('zoomed')
-                self._log("🖥️ Report Exporter: Maximized mode")
+                try:
+                    child_window.state('zoomed')
+                    print("🖥️ Report Exporter: Maximized mode")
+                except:
+                    pass
                 
             else:
                 # Parent is normal - match parent's size and center on same monitor
@@ -944,7 +901,7 @@ class SalesforceExporterGUI(ctk.CTk):
                     monitor_height
                 )
                 
-                self._log(f"🖥️ Report Exporter: Normal mode ({child_width}x{child_height})")
+                print(f"🖥️ Report Exporter: Normal mode ({child_width}x{child_height})")
             
             # Force window to update
             child_window.update_idletasks()
@@ -955,7 +912,133 @@ class SalesforceExporterGUI(ctk.CTk):
             try:
                 child_window.geometry("1200x740")
             except:
+                pass     
+
+
+    # ✅ NEW METHOD 1 - Report Exporter Action
+    # gui.py - REPLACE the report_exporter_action method
+
+    def report_exporter_action(self):
+        """Handle Report Exporter button click (6th button)"""
+        if not self.sf_client:
+            messagebox.showerror("Error", "Not logged in. Please log in first.")
+            return
+        
+        # Build session info for Report Exporter
+        session_info = {
+            "session_id": self.sf_client.session_id,
+            "instance_url": self.sf_client.base_url,
+            "api_version": self.sf_client.api_version,
+            "user_name": self.username_entry.get()
+        }
+        
+        # ✅ CRITICAL FIX: Check if window exists and is alive
+        window_exists = (
+            self.report_exporter_frame is not None and 
+            hasattr(self.report_exporter_frame, 'winfo_exists') and
+            self.report_exporter_frame.winfo_exists()
+        )
+        
+        if window_exists:
+            # Window already exists - just show it
+            try:
+                self.report_exporter_frame.deiconify()
+                self.report_exporter_frame.lift()
+                self.report_exporter_frame.focus_force()
+                
+                # Hide main window
+                self.withdraw()
+                
+                print("✅ Report Exporter: Restored existing window")
+                return
+                
+            except Exception as e:
+                print(f"⚠️ Error showing existing window: {e}")
+                # Window is broken, recreate it
+                self.report_exporter_frame = None
+        
+        # Create new window
+        try:
+            print("🔨 Creating new Report Exporter window...")
+            
+            self.report_exporter_frame = SalesforceExporterApp(
+                master=self,
+                session_info=session_info,
+                on_logout=self.show_export_frame_from_report_exporter
+            )
+            
+            # ✅ CRITICAL: Don't hide parent yet - let child initialize first
+            print("⏳ Window created, initializing...")
+            
+            # ✅ Get parent window state AFTER child is created
+            parent_state = self._get_window_state_info()
+            
+            # ✅ Apply parent state with delay (let child finish _setup_ui first)
+            self.after(100, lambda: self._finalize_report_exporter_window(parent_state))
+            
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            
+            print(f"❌ Failed to create Report Exporter:")
+            print(error_details)
+            
+            messagebox.showerror(
+                "Error",
+                f"Failed to open Report Exporter:\n\n{str(e)}"
+            )
+            
+            self.report_exporter_frame = None
+            return
+    
+    # gui.py - ADD this new method
+
+    def _finalize_report_exporter_window(self, parent_state):
+        """
+        Finalize report exporter window after initialization.
+        
+        ✅ Called with delay to ensure child window is fully initialized.
+        """
+        try:
+            # Check if window still exists
+            if not self.report_exporter_frame or not self.report_exporter_frame.winfo_exists():
+                print("⚠️ Report Exporter window destroyed during initialization")
+                self.deiconify()  # Show parent again
+                return
+            
+            # Apply parent state to child
+            print("🎨 Applying window state...")
+            self._apply_parent_state_to_child(self.report_exporter_frame, parent_state)
+            
+            # NOW hide parent window
+            print("👁️ Hiding parent window...")
+            self.withdraw()
+            
+            # Ensure child is visible and focused
+            self.report_exporter_frame.deiconify()
+            self.report_exporter_frame.lift()
+            self.report_exporter_frame.focus_force()
+            
+            print("✅ Report Exporter window finalized successfully")
+            
+            # Log action
+            try:
+                self.update_status("📊 Opened Report Exporter")
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"❌ Error finalizing Report Exporter window: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Recovery: show parent window again
+            try:
+                self.deiconify()
+            except:
                 pass    
+    
+    
     
     
     # ✅ NEW METHOD 2 - Back from Report Exporter
@@ -1292,32 +1375,70 @@ class SalesforceExporterGUI(ctk.CTk):
             
             # Clear SOQL frame (existing)
             if self.soql_frame:
-                self.soql_frame.destroy()
+                try:
+                    self.soql_frame.destroy()
+                except:
+                    pass
                 self.soql_frame = None
             
-            # Clear switch frame and manager (NEW)
+            # Clear switch frame and manager (existing)
             if self.switch_frame:
-                self.switch_frame.destroy()
+                try:
+                    self.switch_frame.destroy()
+                except:
+                    pass
                 self.switch_frame = None
             self.metadata_switch_manager = None
             
-            # ✅ Clear report exporter frame (Toplevel window)
+            # ✅ FIXED: Properly clear report exporter frame (Toplevel window)
             if self.report_exporter_frame:
                 try:
                     if self.report_exporter_frame.winfo_exists():
-                        self.report_exporter_frame.destroy()
-                except:
-                    pass
-                self.report_exporter_frame = None
+                        # ✅ Set destruction flag first
+                        try:
+                            self.report_exporter_frame._is_being_destroyed = True
+                        except:
+                            pass
+                        
+                        # ✅ Cancel any ongoing operations
+                        try:
+                            self.report_exporter_frame.export_cancel_event.set()
+                        except:
+                            pass
+                        
+                        # ✅ Give threads a moment to cleanup
+                        self.after(100, lambda: self._destroy_report_frame())
+                    else:
+                        self.report_exporter_frame = None
+                except Exception as e:
+                    print(f"⚠️ Error closing report exporter: {e}")
+                    self.report_exporter_frame = None
             
             # Reset the login button state and text
             self.login_button.configure(state="normal", text="Login to Salesforce")
             
-            self.update_status("Logged out successfully. Please log in again.")
+            try:
+                self.update_status("Logged out successfully. Please log in again.")
+            except:
+                print("Logged out successfully. Please log in again.")
             
             # Switch back to Login Frame
             self.export_frame.grid_forget()
             self.login_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+            
+            # ✅ Show main window if it was hidden
+            self.deiconify()
+
+    def _destroy_report_frame(self):
+        """Helper method to destroy report exporter frame safely"""
+        if self.report_exporter_frame:
+            try:
+                if self.report_exporter_frame.winfo_exists():
+                    self.report_exporter_frame.destroy()
+            except Exception as e:
+                print(f"⚠️ Error destroying report frame: {e}")
+            finally:
+                self.report_exporter_frame = None
 
 
 
