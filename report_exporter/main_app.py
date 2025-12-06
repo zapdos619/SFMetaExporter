@@ -1051,24 +1051,25 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         self.cancel_button.grid_remove()  # Hide initially
         self.cancel_button.lower()
         
-        # ========== MIDDLE ROW: Progress Bar (Full Width) - UNCHANGED ==========
+        # ========== MIDDLE ROW: Progress Bar (Full Width) ==========
         progress_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent")
         progress_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(3, 3))
         progress_frame.grid_columnconfigure(0, weight=1)
-        
+
         # Progress bar
         self.progress_bar = ctk.CTkProgressBar(progress_frame, height=20)
         self.progress_bar.grid(row=0, column=0, sticky="ew", pady=(0, 5))
         self.progress_bar.set(0)
         
-        # Progress label (below progress bar)
+        # ✅ FIX: Progress label with better positioning
         self.progress_label = ctk.CTkLabel(
             progress_frame,
             text="Ready to export",
             font=ctk.CTkFont(size=11),
-            text_color="gray"
+            text_color="gray",
+            anchor="w"  # ✅ LEFT align
         )
-        self.progress_label.grid(row=1, column=0, sticky="w", pady=(0, 5))
+        self.progress_label.grid(row=1, column=0, sticky="w", pady=(0, 0))
         
         # ========== BOTTOM ROW: Activity Log - UNCHANGED ==========
         log_frame = ctk.CTkFrame(bottom_frame, height=120)
@@ -2898,11 +2899,13 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         # All checks passed - proceed with export
         self._start_export()
 
+    # main_app.py - REPLACE _export_worker_safe method
+    
     def _export_worker_safe(self, report_ids: List[str], export_format: str = "csv"):
         """
         Safe wrapper for _export_worker that prevents crashes.
         
-        ✅ NEW: Ensures all exceptions are caught and handled gracefully.
+        ✅ FIXED: Does NOT reset state (let _on_export_complete do it)
         """
         try:
             self._export_worker(report_ids, export_format)
@@ -2910,22 +2913,20 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             import traceback
             error_details = traceback.format_exc()
             
-            # Log full error to console
+            # Log full error
             print(f"❌ EXPORT WORKER CRASH:")
             print(error_details)
             
             # Queue error message to UI
-            error_msg = f"Export worker crashed: {str(e)}"
-            self.update_queue.put(("log", f"❌ {error_msg}"))
-            self.update_queue.put(("export_error", error_msg))
-        finally:
-            # ✅ CRITICAL: Always reset state, even on crash
-            try:
-                with self.state_lock:
-                    if self._export_state == "running":
-                        self._set_export_state("idle")
-            except:
-                pass
+            self.update_queue.put(("log", f"❌ Export crashed: {str(e)}"))
+            self.update_queue.put(("export_error", f"Export failed: {str(e)}"))
+            
+            # ✅ IMPORTANT: Reset state only on ERROR, not on success
+            with self.state_lock:
+                if self._export_state == "running":
+                    self._set_export_state("idle")
+        
+
          
     def _export_worker(self, report_ids: List[str], export_format: str = "csv"):
         """
@@ -3014,6 +3015,20 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             
             self.update_queue.put(("export_complete", result))
             
+            # ✅ ADD THIS DEBUG LOGGING:
+            print("=" * 60)
+            print("🔍 DEBUG: Export worker finished")
+            print(f"   Result type: {type(result)}")
+            print(f"   Result keys: {result.keys() if isinstance(result, dict) else 'NOT A DICT'}")
+            print(f"   Total: {result.get('total') if isinstance(result, dict) else 'N/A'}")
+            print(f"   Successful: {len(result.get('successful', [])) if isinstance(result, dict) else 'N/A'}")
+            print(f"   Cancelled: {result.get('cancelled') if isinstance(result, dict) else 'N/A'}")
+            print("=" * 60)
+            
+            # Queue the completion event
+            print("📤 Queueing 'export_complete' event...")
+            print("✅ Event queued successfully")
+            
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
@@ -3061,30 +3076,47 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 text_color="#1f6aa5"
             )
     
+    # main_app.py - REPLACE _on_export_complete method
+
     def _on_export_complete(self, result: Dict):
         """
         Handle export completion (including cancellation).
         
-        IMPROVED: Proper state cleanup with atomic transitions.
+        ✅ FIXED: Removed _showing_dialog blocking that prevents popups
         """
-        print("📥 Export completion handler called")
+        print("\n" + "=" * 70)
+        print("🔥 _ON_EXPORT_COMPLETE CALLED!")
+        print("=" * 70)
+        print(f"📦 Result received: {result}")
+        print(f"📦 Type: {type(result)}")
         
-        # ✅ GUARD: Prevent multiple completion handlers
+        # Check state
         with self.state_lock:
-            current_state = self._get_export_state()
+            current_state = self._export_state
+            showing_dialog = self._showing_dialog
             
+            print(f"🔒 State check:")
+            print(f"   _export_state: {current_state}")
+            print(f"   _showing_dialog: {showing_dialog}")
+            print(f"   is_exporting: {self.is_exporting}")
+        
+        print("=" * 70 + "\n")
+        
+        # ✅ FIXED: Only block if dialog is already showing (prevent duplicate dialogs)
+        # Don't check state - export might have finished but dialogs not shown yet
+        with self.state_lock:
             if self._showing_dialog:
-                # Already showing completion dialog, ignore duplicate calls
                 print("⚠️ Completion dialog already showing, ignoring duplicate call")
                 return
             
-            if current_state == "idle":
-                # Already handled completion, ignore
-                print("⚠️ Export already completed, ignoring duplicate call")
-                return
-            
-            # Mark that we're showing dialog
+            # Mark that we're handling completion
             self._showing_dialog = True
+            
+            # Reset state NOW (before dialogs)
+            self._export_state = "idle"
+            self.is_exporting = False
+        
+        print("✅ State reset to IDLE, proceeding with completion...")
         
         # Extract result data
         total = result.get("total", 0)
@@ -3094,9 +3126,13 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         was_cancelled = result.get("cancelled", False)
         completed = result.get("completed", len(successful))
         
-        # Update progress with statistics
+        print(f"📊 Export summary: {completed}/{total} reports, cancelled={was_cancelled}")
+
+        
+        # Update progress tracker
         elapsed = self.progress_tracker.get_elapsed_seconds()
         elapsed_formatted = self.progress_tracker.format_time(elapsed)
+        avg_speed = completed / elapsed if elapsed > 0 else 0
         
         # Update progress bar and label
         if was_cancelled:
@@ -3104,16 +3140,15 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             self.progress_bar.set(progress_value)
             
             self.progress_label.configure(
-                text=f"⚠️ Export cancelled after {elapsed_formatted}. Saved {completed}/{total} reports",
+                text=f"⚠️ Export cancelled - saved {completed}/{total} reports ({elapsed_formatted})",
                 text_color="orange"
             )
         else:
             self.progress_bar.set(1.0)
             
-            # Get completion statistics
-            completion_text = self.progress_tracker.get_completion_text()
+            # ✅ FIX: Show "Export Complete" message
             self.progress_label.configure(
-                text=completion_text,
+                text=f"✅ Export Complete: {completed}/{total} reports in {elapsed_formatted} ({avg_speed:.1f} reports/sec)",
                 text_color="green"
             )
         
@@ -3126,9 +3161,6 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         else:
             self._log(f"✅ EXPORT COMPLETED SUCCESSFULLY")
             self._log(f"📊 Total: {total} reports")
-        
-        # Export statistics
-        avg_speed = completed / elapsed if elapsed > 0 else 0
         
         self._log(f"⏱️  Duration: {elapsed_formatted}")
         if avg_speed > 0:
@@ -3152,38 +3184,142 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             if len(failed) > 5:
                 self._log(f"  ... and {len(failed) - 5} more (see summary file)")
         
-        # ✅ CRITICAL: Reset export state BEFORE showing dialogs
-        # This ensures buttons work correctly even if user cancels dialog
-        self._reset_export_state()
-        
         # ✅ Update UI state
         self._set_export_ui_state(True)
         
         # ✅ Refresh button visibility
         self._refresh_button_visibility()
         
-        # Force UI update
+        # Force UI update BEFORE dialogs
         self.update_idletasks()
         
-        print("✅ Export state reset to IDLE, showing user dialog...")
+        print("🎬 About to show completion dialogs...")
         
-        # ✅ Handle cancellation vs completion separately
-        if was_cancelled:
-            self._handle_cancelled_export(completed, total, successful, failed, elapsed_formatted, avg_speed, zip_path)
-        else:
-            self._handle_successful_export(total, successful, failed, elapsed_formatted, avg_speed, zip_path)
+        # ✅ Show dialogs on main thread with slight delay (ensure UI is stable)
+        self.after(100, lambda: self._show_completion_dialogs(
+            was_cancelled, completed, total, successful, failed, 
+            elapsed_formatted, avg_speed, zip_path
+        ))
         
-        # ✅ CRITICAL: Clear dialog flag after user interaction
-        with self.state_lock:
-            self._showing_dialog = False
         
-        print("✅ Completion handler finished")
+    # main_app.py - ADD this new method
+
+    def _show_completion_dialogs(self, was_cancelled, completed, total, successful, 
+                                failed, elapsed_formatted, avg_speed, zip_path):
+        """
+        Show completion dialogs (separated from state management).
+        
+        ✅ Called with delay to ensure UI is stable before showing dialogs.
+        """
+        print("📢 Showing completion dialogs...")
+        
+        try:
+            # Ensure window has focus
+            self.lift()
+            self.focus_force()
+            self.attributes('-topmost', True)
+            self.update_idletasks()
+            self.attributes('-topmost', False)
+            
+            print("✅ Window focused, showing messagebox...")
+            
+            if was_cancelled:
+                # Cancellation dialog
+                success_rate = (len(successful) / total * 100) if total > 0 else 0
+                
+                message = f"Export was cancelled.\n\n"
+                message += f"📊 Statistics:\n"
+                message += f"  • Completed: {completed}/{total} reports\n"
+                message += f"  • Successful: {len(successful)}\n"
+                message += f"  • Failed: {len(failed)}\n"
+                message += f"  • Success Rate: {success_rate:.1f}%\n"
+                message += f"  • Duration: {elapsed_formatted}\n"
+                if avg_speed > 0:
+                    message += f"  • Average Speed: {avg_speed:.1f} reports/sec\n"
+                message += f"\n💾 Partial export saved to:\n{zip_path}\n\n"
+                message += f"Do you want to keep this partial export?"
+                
+                print("📋 Showing cancellation dialog...")
+                keep_result = messagebox.askyesnocancel(
+                    "Export Cancelled",
+                    message,
+                    icon='warning',
+                    parent=self
+                )
+                
+                print(f"   User choice: {keep_result}")
+                
+                if keep_result is False:  # Delete
+                    try:
+                        import os
+                        os.remove(zip_path)
+                        self._log(f"🗑️ Partial export deleted")
+                        messagebox.showinfo("Deleted", "Partial export has been deleted.", parent=self)
+                    except Exception as e:
+                        self._log(f"❌ Failed to delete: {str(e)}")
+                        messagebox.showerror("Error", f"Could not delete file:\n{str(e)}", parent=self)
+                
+                elif keep_result is True:  # Keep and ask about opening folder
+                    self._ask_open_folder(zip_path)
+            
+            else:
+                # Success dialog
+                success_rate = (len(successful) / total * 100) if total > 0 else 0
+                
+                message = f"Export completed successfully!\n\n"
+                message += f"📊 Statistics:\n"
+                message += f"  • Total Reports: {total}\n"
+                message += f"  • Successful: {len(successful)}\n"
+                message += f"  • Failed: {len(failed)}\n"
+                message += f"  • Success Rate: {success_rate:.1f}%\n"
+                message += f"  • Duration: {elapsed_formatted}\n"
+                if avg_speed > 0:
+                    message += f"  • Average Speed: {avg_speed:.1f} reports/sec\n"
+                message += f"\n💾 ZIP saved to:\n{zip_path}"
+                
+                print("📋 Showing success dialog...")
+                messagebox.showinfo("Export Complete", message, parent=self)
+                print("✅ Success dialog closed")
+                
+                # Ask about opening folder
+                print("📂 Asking about opening folder...")
+                self._ask_open_folder(zip_path)
+            
+            print("✅ All completion dialogs finished")
+            
+        except Exception as e:
+            print(f"❌ Error showing dialogs: {e}")
+            import traceback
+            traceback.print_exc()        
+        
+        
+
+    # main_app.py - ADD this new method before _handle_cancelled_export
+
+    def _ensure_window_focus(self):
+        """
+        Ensure this window has focus before showing dialogs.
+        Prevents dialogs from appearing behind other windows.
+        """
+        try:
+            # Bring window to front
+            self.lift()
+            self.attributes('-topmost', True)
+            self.update_idletasks()
+            self.attributes('-topmost', False)
+            self.focus_force()
+        except Exception as e:
+            print(f"⚠️ Could not ensure window focus: {e}")
+
+
     
+    # main_app.py - REPLACE _handle_cancelled_export method
+
     def _handle_cancelled_export(self, completed, total, successful, failed, elapsed_formatted, avg_speed, zip_path):
         """
         Handle UI flow when export was cancelled.
         
-        IMPROVED: Better dialog management and state handling.
+        IMPROVED: Ensures dialogs appear on top.
         """
         # Build cancellation message
         message = f"Export was cancelled.\n\n"
@@ -3197,11 +3333,15 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         message += f"\nPartial export saved to:\n{zip_path}\n\n"
         message += f"Do you want to keep this partial export?"
         
+        # ✅ Ensure window focus before dialog
+        self._ensure_window_focus()
+        
         # Ask user about partial export
         keep_result = messagebox.askyesnocancel(
             "Export Cancelled",
             message,
-            icon='warning'
+            icon='warning',
+            parent=self
         )
         
         if keep_result is False:  # User chose "No" - delete
@@ -3209,25 +3349,23 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 import os
                 os.remove(zip_path)
                 self._log(f"🗑️ Partial export deleted")
-                messagebox.showinfo("Deleted", "Partial export has been deleted.")
+                messagebox.showinfo("Deleted", "Partial export has been deleted.", parent=self)
             except Exception as e:
                 self._log(f"❌ Failed to delete: {str(e)}")
-                messagebox.showerror("Error", f"Could not delete file:\n{str(e)}")
+                messagebox.showerror("Error", f"Could not delete file:\n{str(e)}", parent=self)
         
         elif keep_result is True:  # User chose "Yes" - keep and ask about opening folder
             self._ask_open_folder(zip_path)
         
-        # If None (Cancel button), do nothing - just keep the file
         print("✅ Cancelled export handler finished")
-
-
-        # If None (Cancel button), do nothing - just keep the file
     
+    # main_app.py - REPLACE _handle_successful_export method
+
     def _handle_successful_export(self, total, successful, failed, elapsed_formatted, avg_speed, zip_path):
         """
         Handle UI flow when export completed successfully.
         
-        IMPROVED: Cleaner dialog flow.
+        IMPROVED: Ensures dialogs appear on top.
         """
         success_rate = (len(successful) / total * 100) if total > 0 else 0
         
@@ -3243,8 +3381,11 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             message += f"  • Average Speed: {avg_speed:.1f} reports/sec\n"
         message += f"\n💾 ZIP saved to:\n{zip_path}"
         
+        # ✅ Ensure window focus before dialog
+        self._ensure_window_focus()
+        
         # Show success dialog
-        messagebox.showinfo("Export Complete", message)
+        messagebox.showinfo("Export Complete", message, parent=self)
         
         # Ask about opening folder
         self._ask_open_folder(zip_path)
@@ -3252,37 +3393,55 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         print("✅ Successful export handler finished")
 
     
+    # main_app.py - REPLACE _ask_open_folder method
+
     def _ask_open_folder(self, zip_path):
         """
         Ask user if they want to open the folder containing the export.
         
-        IMPROVED: Better error handling.
+        IMPROVED: Better error handling and focus management.
         """
         import subprocess
         import platform
         import os
         
-        result = messagebox.askyesno(
-            "Open Folder?", 
-            "Would you like to open the folder containing the exported file?"
-        )
+        print(f"📂 Asking to open folder: {zip_path}")
         
-        if result:
-            folder = os.path.dirname(zip_path)
+        try:
+            # Ensure focus
+            self.lift()
+            self.focus_force()
             
-            try:
-                if platform.system() == "Windows":
-                    os.startfile(folder)
-                elif platform.system() == "Darwin":  # macOS
-                    subprocess.Popen(["open", folder])
-                else:  # Linux
-                    subprocess.Popen(["xdg-open", folder])
+            result = messagebox.askyesno(
+                "Open Folder?", 
+                "Would you like to open the folder containing the exported file?",
+                parent=self
+            )
+            
+            print(f"   User choice: {result}")
+            
+            if result:
+                folder = os.path.dirname(zip_path)
                 
-                self._log(f"📂 Opened folder: {folder}")
-                
-            except Exception as e:
-                self._log(f"❌ Could not open folder: {str(e)}")
-                messagebox.showerror("Error", f"Could not open folder:\n{str(e)}")
+                try:
+                    if platform.system() == "Windows":
+                        os.startfile(folder)
+                    elif platform.system() == "Darwin":  # macOS
+                        subprocess.Popen(["open", folder])
+                    else:  # Linux
+                        subprocess.Popen(["xdg-open", folder])
+                    
+                    self._log(f"📂 Opened folder: {folder}")
+                    print(f"✅ Folder opened: {folder}")
+                    
+                except Exception as e:
+                    self._log(f"❌ Could not open folder: {str(e)}")
+                    messagebox.showerror("Error", f"Could not open folder:\n{str(e)}", parent=self)
+            
+        except Exception as e:
+            print(f"❌ Error in _ask_open_folder: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _on_export_error(self, error_msg: str):
         """
@@ -3680,6 +3839,9 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 event_type = item[0]
                 data = item[1] if len(item) > 1 else None
                 
+                # ✅ ADD DEBUG LOGGING HERE:
+                print(f"🎬 Processing queue event: {event_type}")
+                
                 # ✅ Handle each event type with error handling
                 try:
                     if event_type == "search_complete":
@@ -3698,7 +3860,17 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                         self._on_export_progress(data)
                         
                     elif event_type == "export_complete":
+                        # ✅ ADD EXTRA DEBUG HERE:
+                        print("=" * 60)
+                        print("🎯 EXPORT_COMPLETE EVENT RECEIVED!")
+                        print(f"   Data type: {type(data)}")
+                        print(f"   Data: {data}")
+                        print("   Calling _on_export_complete()...")
+                        print("=" * 60)   
+                             
                         self._on_export_complete(data)
+                        
+                        print("✅ _on_export_complete() returned")
                         
                     elif event_type == "export_error":
                         self._on_export_error(data)
