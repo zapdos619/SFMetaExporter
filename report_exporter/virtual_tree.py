@@ -12,17 +12,34 @@ class VirtualTreeView:
     Virtual scrolling tree view that only renders visible items.
     Prevents UI freezing by lazy-loading widgets on scroll.
     """
-    
-    def __init__(
-        self,
-        parent_frame: ctk.CTkScrollableFrame,
-        item_height: int = 50,
-        buffer_items: int = 5  # ✅ CORRECT parameter name
-    ):
+    def __init__(self, parent_frame, item_height: int = 50, buffer_items: int = 5, theme_colors: dict = None):
+        """
+        Initialize virtual tree view.
+        
+        Args:
+            parent_frame: CTkScrollableFrame to render items in
+            item_height: Height of each item in pixels
+            buffer_items: Number of items to render beyond visible area
+            theme_colors: Dictionary of theme-aware colors (optional)
+        """
         self.parent_frame = parent_frame
         self.item_height = item_height
         self.buffer_items = buffer_items
         
+        # ✅ NEW: Store theme colors or use defaults
+        if theme_colors:
+            self.theme_colors = theme_colors
+        else:
+            # Default to dark theme colors for backward compatibility
+            self.theme_colors = {
+                "bg_primary": "#2b2b2b",
+                "bg_secondary": "#1a1a1a",
+                "bg_container": "#333333",
+                "fg_text": "#FFFFFF",
+                "fg_text_dim": "gray",
+                "selection_bg": "#1f6aa5",
+            }
+
         # Data storage
         self.all_items: List[Dict] = []
         self.visible_widgets: Dict[int, Dict] = {}
@@ -44,6 +61,7 @@ class VirtualTreeView:
         
         # Bind scroll events
         self._setup_scroll_monitoring()
+
     
     def _setup_scroll_monitoring(self):
         """Setup scroll event monitoring"""
@@ -224,7 +242,7 @@ class VirtualTreeView:
         # Main folder frame
         folder_frame = ctk.CTkFrame(
             self.parent_frame,
-            fg_color="#333333",
+            fg_color=self.theme_colors["bg_container"],  # ✅ Theme-aware
             corner_radius=5
         )
         folder_frame.grid(row=row, column=0, sticky="ew", padx=5, pady=2)
@@ -258,7 +276,8 @@ class VirtualTreeView:
             width=25,
             height=25,
             fg_color="transparent",
-            hover_color="#444444",
+            hover_color=self.theme_colors.get("hover", "#444444"),  # ✅ Theme-aware hover
+            text_color=self.theme_colors["fg_text"],  # ✅ Theme-aware text (arrow visible now!)
             font=ctk.CTkFont(size=12),
             command=lambda: self._on_folder_expand_clicked(folder_id, idx)
         )
@@ -270,14 +289,15 @@ class VirtualTreeView:
             folder_frame,
             text=f"{icon} {folder_name} ({len(reports)} reports)",
             font=ctk.CTkFont(size=12),
-            anchor="w"
+            anchor="w",
+            text_color=self.theme_colors["fg_text"]  # ✅ Theme-aware
         )
         folder_label.grid(row=0, column=2, sticky="ew", padx=(0, 10), pady=5)
         
         # Reports container (only create if expanded)
         reports_frame = None
         if is_expanded:
-            reports_frame = ctk.CTkFrame(self.parent_frame, fg_color="#2b2b2b")
+            reports_frame = ctk.CTkFrame(self.parent_frame, fg_color=self.theme_colors["bg_primary"])  # ✅ Theme-aware
             reports_frame.grid(row=row + 1, column=0, sticky="ew", padx=(30, 5), pady=(0, 2))
             reports_frame.grid_columnconfigure(0, weight=1)
             
@@ -301,7 +321,7 @@ class VirtualTreeView:
             no_reports_label = ctk.CTkLabel(
                 parent_frame,
                 text="No reports in this folder",
-                text_color="gray",
+                text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
                 font=ctk.CTkFont(size=11)
             )
             no_reports_label.grid(row=0, column=0, padx=10, pady=5)
@@ -338,7 +358,8 @@ class VirtualTreeView:
                 report_frame,
                 text=f"📄 {report_name}",
                 font=ctk.CTkFont(size=11),
-                anchor="w"
+                anchor="w",
+                text_color=self.theme_colors["fg_text"]  # ✅ Theme-aware
             )
             report_label.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=5)
     

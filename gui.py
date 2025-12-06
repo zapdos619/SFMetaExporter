@@ -924,12 +924,16 @@ class SalesforceExporterGUI(ctk.CTk):
             messagebox.showerror("Error", "Not logged in. Please log in first.")
             return
         
+        # ✅ NEW: Get current appearance mode
+        current_appearance = ctk.get_appearance_mode()  # Returns "Light" or "Dark"
+        
         # Build session info for Report Exporter
         session_info = {
             "session_id": self.sf_client.session_id,
             "instance_url": self.sf_client.base_url,
             "api_version": self.sf_client.api_version,
-            "user_name": self.username_entry.get()
+            "user_name": self.username_entry.get(),
+            "appearance_mode": current_appearance  # ✅ NEW: Pass theme to child
         }
         
         # ✅ CRITICAL FIX: Check if window exists and is alive

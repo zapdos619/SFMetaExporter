@@ -140,6 +140,9 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         # ✅ CRITICAL: Initialize _log method FIRST (before anything else)
         self._log_buffer = []  # Buffer for early log messages
         
+        # ✅ NEW: Store theme colors for UI elements
+        self.theme_colors = self._get_theme_colors()
+        
         # Store session info and logout callback
         self.session_info = session_info
         self.on_logout_callback = on_logout
@@ -175,8 +178,12 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             except:
                 pass
         
-        ctk.set_appearance_mode("dark")
+        # ✅ NEW: Apply parent's appearance mode instead of hardcoding
+        parent_appearance = session_info.get("appearance_mode", "Dark")
+        ctk.set_appearance_mode(parent_appearance)
         ctk.set_default_color_theme("blue")
+
+        #self._log(f"🎨 Theme: {parent_appearance} mode")
         
         # UI State Management
         self.ui_state = "idle"
@@ -217,6 +224,9 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         # ✅ NOW the log textbox exists, flush buffered messages
         self._flush_log_buffer()
+        
+        parent_appearance = self.session_info.get("appearance_mode", "Dark")
+        self._log(f"🎨 Theme: {parent_appearance} mode")
         
         # Center window on screen
         self.after(100, self._center_window)
@@ -269,6 +279,51 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             print(f"⚠️ Log error: {e}")
             # Fallback to console
             print(log_msg.strip())
+            
+
+    def _get_theme_colors(self) -> dict:
+        """
+        Get theme-appropriate colors based on current appearance mode.
+        
+        Returns:
+            Dictionary with color values for current theme
+        """
+        appearance = ctk.get_appearance_mode()
+        
+        if appearance == "Light":
+            return {
+                # Light mode colors
+                "bg_primary": "#F0F0F0",        # Light gray background
+                "bg_secondary": "#FFFFFF",      # White secondary
+                "bg_container": "#E8E8E8",      # Light container
+                "fg_text": "#000000",           # Black text
+                "fg_text_dim": "#666666",       # Dark gray for secondary text
+                "border": "#CCCCCC",            # Light border
+                "selection_bg": "#0078D4",      # Blue selection
+                "selection_fg": "#FFFFFF",      # White text on selection
+                "hover": "#DADADA",            # Hover effect
+                "error": "#D32F2F",             # Red (same in both)
+                "success": "#2E7D32",           # Green (same in both)
+                "warning": "#F57C00"            # Orange (same in both)
+            }
+        else:
+            return {
+                # Dark mode colors (original)
+                "bg_primary": "#2b2b2b",
+                "bg_secondary": "#1a1a1a",
+                "bg_container": "#333333",
+                "fg_text": "#FFFFFF",
+                "fg_text_dim": "gray",
+                "border": "#444444",
+                "selection_bg": "#1f6aa5",
+                "selection_fg": "#FFFFFF",
+                "hover": "#3a3a3a",
+                "error": "#d32f2f",
+                "success": "#2e7d32",
+                "warning": "#f57c00"
+            }            
+
+
 
     def _flush_log_buffer(self):
         """
@@ -704,7 +759,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             left_frame,
             text="Select folders and reports to export • F5 to refresh • Ctrl+E to export • ESC to cancel",
             font=ctk.CTkFont(size=11),
-            text_color="gray",
+            text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
             justify="center"
         )
         self.subtitle_label.pack(anchor="w", pady=(3, 0))
@@ -820,7 +875,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         # ========== ROW 1: Tree View Container (expands fully) ==========
         self.tree_container = ctk.CTkScrollableFrame(
             left_panel,
-            fg_color="#2b2b2b",
+            fg_color=self.theme_colors["bg_container"],  # ✅ Theme-aware
             corner_radius=5
         )
         self.tree_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -860,14 +915,14 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             right_panel,
             text="0 reports selected",
             font=ctk.CTkFont(size=12),
-            text_color="gray"
+            text_color=self.theme_colors["fg_text_dim"]  # ✅ Theme-aware
         )
         self.selection_count_label.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 3))  # ✅ REDUCED from pady=(0, 5)
         
         # Selected items list (Scrollable, expands)
         self.selected_container = ctk.CTkScrollableFrame(
             right_panel,
-            fg_color="#2b2b2b",
+            fg_color=self.theme_colors["bg_container"],  # ✅ Theme-aware
             corner_radius=5
         )
         self.selected_container.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 5))  # ✅ REDUCED from pady=(0, 10)
@@ -877,7 +932,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         self.selected_placeholder = ctk.CTkLabel(
             self.selected_container,
             text="No reports selected.\nSelect from left panel.",
-            text_color="gray",
+            text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
             font=ctk.CTkFont(size=12),
             justify="center"
         )
@@ -1066,8 +1121,8 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             progress_frame,
             text="Ready to export",
             font=ctk.CTkFont(size=11),
-            text_color="gray",
-            anchor="w"  # ✅ LEFT align
+            text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
+            anchor="w"
         )
         self.progress_label.grid(row=1, column=0, sticky="w", pady=(0, 0))
         
@@ -1104,7 +1159,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             log_frame,
             wrap="word",
             font=ctk.CTkFont(family="Consolas", size=10),
-            fg_color="#1a1a1a"
+            fg_color=self.theme_colors["bg_secondary"]  # ✅ Theme-aware
         )
         self.log_textbox.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.log_textbox.configure(state="disabled")   
@@ -1587,12 +1642,12 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 error_frame,
                 text=display_error,
                 font=ctk.CTkFont(size=11),
-                text_color="gray",
+                text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
                 wraplength=400,
                 justify="center"
             )
             error_label.pack(pady=(0, 15))
-            
+
             # Helpful suggestion
             suggestion = self._get_search_error_suggestion(error_msg)
             if suggestion:
@@ -1600,7 +1655,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                     error_frame,
                     text=f"💡 {suggestion}",
                     font=ctk.CTkFont(size=10),
-                    text_color="#1f6aa5",
+                    text_color=self.theme_colors["selection_bg"],  # ✅ Theme-aware blue
                     wraplength=400,
                     justify="center"
                 )
@@ -1689,16 +1744,16 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             no_results_frame,
             text=f"No folders or reports match '{keyword}'",
             font=ctk.CTkFont(size=12),
-            text_color="gray"
+            text_color=self.theme_colors["fg_text_dim"]  # ✅ Theme-aware
         )
         message_label.pack(pady=(0, 15))
-        
+
         # Suggestions
         suggestions_label = ctk.CTkLabel(
             no_results_frame,
             text="💡 Try:\n• Different keywords (e.g., 'Account', 'Sales', 'Q4')\n• Shorter search terms\n• Check spelling",
             font=ctk.CTkFont(size=11),
-            text_color="gray",
+            text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
             justify="left"
         )
         suggestions_label.pack()
@@ -1726,7 +1781,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             placeholder = ctk.CTkLabel(
                 self.tree_container,
                 text="Search cancelled",
-                text_color="gray",
+                text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
                 font=ctk.CTkFont(size=12)
             )
             placeholder.grid(row=0, column=0, pady=30)
@@ -1768,7 +1823,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             empty_frame,
             text="Enter keywords to search folders and reports\nExample: 'Sales', 'Account', 'Q4 2024'",
             font=ctk.CTkFont(size=11),
-            text_color="gray",
+            text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
             justify="center"
         )
         subtitle_label.pack()
@@ -1979,16 +2034,16 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             loading_label = ctk.CTkLabel(
                 loading_frame,
                 text="Searching Salesforce...",
-                text_color="gray",
+                text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
                 font=ctk.CTkFont(size=14, weight="bold")
             )
             loading_label.pack(pady=(0, 5))
-            
+
             # Keyword display
             keyword_label = ctk.CTkLabel(
                 loading_frame,
                 text=f"Looking for: '{keyword}'",
-                text_color="#1f6aa5",
+                text_color=self.theme_colors["selection_bg"],  # ✅ Theme-aware blue
                 font=ctk.CTkFont(size=12)
             )
             keyword_label.pack()
@@ -2112,7 +2167,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             placeholder = ctk.CTkLabel(
                 self.tree_container,
                 text="No folders found",
-                text_color="gray",
+                text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
                 font=ctk.CTkFont(size=12)
             )
             placeholder.grid(row=0, column=0, pady=30)
@@ -2126,7 +2181,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             loading_label = ctk.CTkLabel(
                 self.tree_container,
                 text=f"⏳ Loading {total_folders} folders with {total_reports} reports...",
-                text_color="gray",
+                text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
                 font=ctk.CTkFont(size=12)
             )
             loading_label.grid(row=0, column=0, pady=30)
@@ -2181,7 +2236,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             placeholder = ctk.CTkLabel(
                 self.tree_container,
                 text=f"No results found for '{search_term}'",
-                text_color="gray",
+                text_color=self.theme_colors["fg_text_dim"],  # ✅ Theme-aware
                 font=ctk.CTkFont(size=12)
             )
             placeholder.grid(row=0, column=0, pady=30)
@@ -2192,7 +2247,8 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             self.virtual_tree = VirtualTreeView(
                 parent_frame=self.tree_container,
                 item_height=50,
-                buffer_items=5
+                buffer_items=5,
+                theme_colors=self.theme_colors  # ✅ Pass theme colors to virtual tree
             )
             
             # Setup callbacks
@@ -2459,7 +2515,11 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         row = 0
         for folder_name, items in sorted(items_by_folder.items()):
             # Folder header - ULTRA COMPACT
-            folder_header = ctk.CTkFrame(self.selected_container, fg_color="#333333", corner_radius=2)
+            folder_header = ctk.CTkFrame(
+                self.selected_container, 
+                fg_color=self.theme_colors["bg_container"],  # ✅ Theme-aware
+                corner_radius=2
+            )
             folder_header.grid(row=row, column=0, sticky="ew", padx=3, pady=(0, 0))  # ✅ MINIMAL padding
             folder_header.grid_columnconfigure(0, weight=1)
             
@@ -2475,7 +2535,11 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             
             # Report items - ULTRA COMPACT
             for item in sorted(items, key=lambda x: x["name"]):
-                item_frame = ctk.CTkFrame(self.selected_container, fg_color="#2b2b2b", corner_radius=2)
+                item_frame = ctk.CTkFrame(
+                    self.selected_container, 
+                    fg_color=self.theme_colors["bg_primary"],  # ✅ Theme-aware
+                    corner_radius=2
+                )
                 item_frame.grid(row=row, column=0, sticky="ew", padx=(8, 3), pady=0)  # ✅ NO vertical gap!
                 item_frame.grid_columnconfigure(0, weight=1)
                 
@@ -2494,7 +2558,8 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                     width=18,  # ✅ TINY
                     height=16,  # ✅ TINY
                     fg_color="transparent",
-                    hover_color="#d32f2f",
+                    hover_color=self.theme_colors["error"],  # ✅ Theme-aware hover
+                    text_color=self.theme_colors["fg_text"],  # ✅ Theme-aware text (× visible now!)
                     font=ctk.CTkFont(size=12),
                     command=lambda item_id=item['id']: self._remove_item_from_selected(item_id)
                 )
@@ -2506,7 +2571,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         count = len(self.selected_items)
         self.selection_count_label.configure(
             text=f"{count} report{'s' if count != 1 else ''} selected",
-            text_color="#1f6aa5"
+            text_color=self.theme_colors["selection_bg"]  # ✅ Theme-aware blue
         )
         
         # Enable buttons
@@ -3051,7 +3116,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             progress_text = self.progress_tracker.get_progress_text()
             self.progress_label.configure(
                 text=progress_text,
-                text_color="#1f6aa5"
+                text_color=self.theme_colors["selection_bg"]  # ✅ Theme-aware blue
             )
     
     
@@ -3073,7 +3138,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             # Update progress label with current report
             self.progress_label.configure(
                 text=f"📥 Downloading: {display_name} ({done}/{total} - {percentage}%)",
-                text_color="#1f6aa5"
+                text_color=self.theme_colors["selection_bg"]  # ✅ Theme-aware blue
             )
     
     # main_app.py - REPLACE _on_export_complete method
@@ -3134,14 +3199,13 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         elapsed_formatted = self.progress_tracker.format_time(elapsed)
         avg_speed = completed / elapsed if elapsed > 0 else 0
         
-        # Update progress bar and label
         if was_cancelled:
             progress_value = completed / total if total > 0 else 0
             self.progress_bar.set(progress_value)
             
             self.progress_label.configure(
                 text=f"⚠️ Export cancelled - saved {completed}/{total} reports ({elapsed_formatted})",
-                text_color="orange"
+                text_color=self.theme_colors["warning"]  # ✅ Theme-aware orange
             )
         else:
             self.progress_bar.set(1.0)
@@ -3149,7 +3213,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             # ✅ FIX: Show "Export Complete" message
             self.progress_label.configure(
                 text=f"✅ Export Complete: {completed}/{total} reports in {elapsed_formatted} ({avg_speed:.1f} reports/sec)",
-                text_color="green"
+                text_color=self.theme_colors["success"]  # ✅ Theme-aware green
             )
         
         # Log summary with statistics
@@ -3469,7 +3533,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         self.progress_label.configure(
             text=f"❌ Export failed after {elapsed_formatted}",
-            text_color="red"
+            text_color=self.theme_colors["error"]  # ✅ Theme-aware red
         )
         
         self._log("=" * 50)
