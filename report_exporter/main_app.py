@@ -2815,130 +2815,141 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         """
         Start the export process.
         
-        ✅ UPDATED: Now handles both CSV and Excel formats with proper validation
+        ✅ FIXED: Properly manages _showing_dialog flag to prevent button lockup
         
         IMPROVED: Proper state management with atomic transitions.
         """
-        # ✅ GUARD: Set dialog flag atomically
+        # ✅ CRITICAL: Check dialog flag FIRST
         with self.state_lock:
             if self._showing_dialog:
-                print("⚠️ Dialog already showing")
+                print("⚠️ Dialog already showing - ignoring export trigger")
                 return
             
             if self._is_export_busy():
                 print("⚠️ Export already busy")
                 return
             
-            # Mark that we're showing dialog
+            # ✅ Mark that we're about to show dialog
             self._showing_dialog = True
         
-        # ✅ NEW: Use centralized validation
-        is_valid, error_msg = self._validate_export_ready()
-        
-        if not is_valid:
+        try:
+            # ✅ NEW: Use centralized validation
+            is_valid, error_msg = self._validate_export_ready()
+            
+            if not is_valid:
+                with self.state_lock:
+                    self._showing_dialog = False
+                messagebox.showwarning("Cannot Export", error_msg)
+                return
+            
+            # Get filename from entry
+            filename = self.filename_entry.get().strip()
+            
+            # Get selected format
+            selected_format = self.export_format.get()
+            format_name = "Excel (.xlsx)" if selected_format == "xlsx" else "CSV"
+            
+            # Validate and fix filename extension if needed
+            if selected_format == "xlsx":
+                if not filename.endswith('.xlsx.zip'):
+                    base_name = filename.replace('.xlsx.zip', '').replace('.zip', '')
+                    filename = f"{base_name}.xlsx.zip"
+            else:
+                if not filename.endswith('.zip') or filename.endswith('.xlsx.zip'):
+                    base_name = filename.replace('.xlsx.zip', '').replace('.zip', '')
+                    filename = f"{base_name}.zip"
+            
+            # ✅ NEW: Check for filename conflicts and auto-resolve
+            directory = os.path.dirname(self.output_zip_path)
+            unique_filename = self._get_unique_filename(directory, filename)
+
+            # Update full path with unique filename
+            self.output_zip_path = os.path.join(directory, unique_filename)
+
+            # ✅ NEW: If filename was changed due to conflict, update the entry field
+            if unique_filename != filename:
+                self.filename_entry.delete(0, "end")
+                self.filename_entry.insert(0, unique_filename)
+                self._log(f"⚠️ File already exists - renamed to: {unique_filename}")
+            
+            # Confirm export with format information
+            count = len(self.selected_items)
+            result = messagebox.askyesno(
+                "Confirm Export",
+                f"Export {count} report(s) in {format_name} format to:\n\n"
+                f"{self.output_zip_path}\n\n"
+                f"Continue?"
+            )
+            
+            # ✅ NEW: Auto-regenerate filename for next export
+            try:
+                self._generate_default_filename()
+                self._log("🔄 Filename reset for next export")
+            except Exception as e:
+                print(f"⚠️ Error regenerating filename: {e}")
+
+            # ✅ CRITICAL: Clear dialog flag IMMEDIATELY after user interaction
             with self.state_lock:
                 self._showing_dialog = False
-            messagebox.showwarning("Cannot Export", error_msg)
-            return
+            
+            if not result:
+                print("ℹ️ Export cancelled by user (dialog)")
+                return
+            
+            # ✅ CRITICAL: Transition to "running" state atomically
+            self._set_export_state("running")
+            
+            # Clear cancel event (fresh start)
+            self.export_cancel_event.clear()
+            
+            # Update UI
+            self._set_export_ui_state(False)
+            
+            self._log(f"🚀 Starting export of {count} selected reports...")
+            self._log(f"📋 Format: {format_name}")
+            self._log(f"📦 Destination: {self.output_zip_path}")
+            
+            # ✅ NEW: Log format-specific information
+            if selected_format == "xlsx":
+                self._log("💡 Excel format: Each report will be converted to .xlsx")
+                self._log("⚠️ Note: Excel export may be slower for large reports")
+            else:
+                self._log("💡 CSV format: Fast export, suitable for large datasets")
+            
+            # Get list of report IDs
+            report_ids = list(self.selected_items.keys())
+            
+            # Initialize progress tracker
+            self.progress_tracker.start(len(report_ids))
+            
+            # ✅ Update buttons to show cancel button
+            self._refresh_button_visibility()
+            
+            # Force update
+            self.update_idletasks()
+            
+            # ✅ Start export in BACKGROUND THREAD (UI stays responsive)
+            thread = threading.Thread(
+                target=self._export_worker_safe,
+                args=(report_ids, selected_format),
+                daemon=True,
+                name=f"ExportThread-{selected_format}"
+            )
+            thread.start()
+            
+            print(f"✅ Export thread started (format: {selected_format})")
         
-        # Get filename from entry
-        filename = self.filename_entry.get().strip()
-        
-        # Get selected format
-        selected_format = self.export_format.get()
-        format_name = "Excel (.xlsx)" if selected_format == "xlsx" else "CSV"
-        
-        # Validate and fix filename extension if needed
-        if selected_format == "xlsx":
-            if not filename.endswith('.xlsx.zip'):
-                base_name = filename.replace('.xlsx.zip', '').replace('.zip', '')
-                filename = f"{base_name}.xlsx.zip"
-        else:
-            if not filename.endswith('.zip') or filename.endswith('.xlsx.zip'):
-                base_name = filename.replace('.xlsx.zip', '').replace('.zip', '')
-                filename = f"{base_name}.zip"
-        
-        # ✅ NEW: Check for filename conflicts and auto-resolve
-        directory = os.path.dirname(self.output_zip_path)
-        unique_filename = self._get_unique_filename(directory, filename)
-
-        # Update full path with unique filename
-        self.output_zip_path = os.path.join(directory, unique_filename)
-
-        # ✅ NEW: If filename was changed due to conflict, update the entry field
-        if unique_filename != filename:
-            self.filename_entry.delete(0, "end")
-            self.filename_entry.insert(0, unique_filename)
-            self._log(f"⚠️ File already exists - renamed to: {unique_filename}")
-        
-        # Confirm export with format information
-        count = len(self.selected_items)
-        result = messagebox.askyesno(
-            "Confirm Export",
-            f"Export {count} report(s) in {format_name} format to:\n\n"
-            f"{self.output_zip_path}\n\n"
-            f"Continue?"
-        )
-        
-        # ✅ NEW: Auto-regenerate filename for next export
-        try:
-            self._generate_default_filename()
-            self._log("🔄 Filename reset for next export")
         except Exception as e:
-            print(f"⚠️ Error regenerating filename: {e}")
+            # ✅ CRITICAL: Always reset dialog flag on ANY error
+            with self.state_lock:
+                self._showing_dialog = False
+            
+            print(f"❌ Error in _start_export: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            messagebox.showerror("Export Error", f"Failed to start export:\n\n{str(e)}")
 
-        # ✅ CRITICAL: Clear dialog flag after user interaction
-        with self.state_lock:
-            self._showing_dialog = False
-
-        print("✅ Completion handler finished")
-        
-        if not result:
-            print("ℹ️ Export cancelled by user (dialog)")
-            return
-        
-        # ✅ CRITICAL: Transition to "running" state atomically
-        self._set_export_state("running")
-        
-        # Clear cancel event (fresh start)
-        self.export_cancel_event.clear()
-        
-        # Update UI
-        self._set_export_ui_state(False)
-        
-        self._log(f"🚀 Starting export of {count} selected reports...")
-        self._log(f"📋 Format: {format_name}")
-        self._log(f"📦 Destination: {self.output_zip_path}")
-        
-        # ✅ NEW: Log format-specific information
-        if selected_format == "xlsx":
-            self._log("💡 Excel format: Each report will be converted to .xlsx")
-            self._log("⚠️ Note: Excel export may be slower for large reports")
-        else:
-            self._log("💡 CSV format: Fast export, suitable for large datasets")
-        
-        # Get list of report IDs
-        report_ids = list(self.selected_items.keys())
-        
-        # Initialize progress tracker
-        self.progress_tracker.start(len(report_ids))
-        
-        # ✅ Update buttons to show cancel button
-        self._refresh_button_visibility()
-        
-        # Force update
-        self.update_idletasks()
-        
-        # ✅ Start export in BACKGROUND THREAD (UI stays responsive)
-        thread = threading.Thread(
-            target=self._export_worker_safe,  # ← CHANGED: Use safe wrapper
-            args=(report_ids, selected_format),
-            daemon=True,
-            name=f"ExportThread-{selected_format}"
-        )
-        thread.start()
-        
-        print(f"✅ Export thread started (format: {selected_format})")
 
     def _start_export_safe(self):
         """
@@ -3143,14 +3154,15 @@ class SalesforceExporterApp(ctk.CTkToplevel):
     
     # main_app.py - REPLACE _on_export_complete method
 
+ 
     def _on_export_complete(self, result: Dict):
         """
         Handle export completion (including cancellation).
         
-        ✅ FIXED: Removed _showing_dialog blocking that prevents popups
+        ✅ FIXED: Dialog flag is managed ONLY during dialog display, not blocking future exports
         """
         print("\n" + "=" * 70)
-        print("🔥 _ON_EXPORT_COMPLETE CALLED!")
+        print("📥 _ON_EXPORT_COMPLETE CALLED!")
         print("=" * 70)
         print(f"📦 Result received: {result}")
         print(f"📦 Type: {type(result)}")
@@ -3158,29 +3170,16 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         # Check state
         with self.state_lock:
             current_state = self._export_state
-            showing_dialog = self._showing_dialog
             
             print(f"🔒 State check:")
             print(f"   _export_state: {current_state}")
-            print(f"   _showing_dialog: {showing_dialog}")
             print(f"   is_exporting: {self.is_exporting}")
-        
-        print("=" * 70 + "\n")
-        
-        # ✅ FIXED: Only block if dialog is already showing (prevent duplicate dialogs)
-        # Don't check state - export might have finished but dialogs not shown yet
-        with self.state_lock:
-            if self._showing_dialog:
-                print("⚠️ Completion dialog already showing, ignoring duplicate call")
-                return
             
-            # Mark that we're handling completion
-            self._showing_dialog = True
-            
-            # Reset state NOW (before dialogs)
+            # ✅ CRITICAL: Reset state NOW (before dialogs)
             self._export_state = "idle"
             self.is_exporting = False
         
+        print("=" * 70 + "\n")
         print("✅ State reset to IDLE, proceeding with completion...")
         
         # Extract result data
@@ -3205,15 +3204,14 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             
             self.progress_label.configure(
                 text=f"⚠️ Export cancelled - saved {completed}/{total} reports ({elapsed_formatted})",
-                text_color=self.theme_colors["warning"]  # ✅ Theme-aware orange
+                text_color=self.theme_colors["warning"]
             )
         else:
             self.progress_bar.set(1.0)
             
-            # ✅ FIX: Show "Export Complete" message
             self.progress_label.configure(
                 text=f"✅ Export Complete: {completed}/{total} reports in {elapsed_formatted} ({avg_speed:.1f} reports/sec)",
-                text_color=self.theme_colors["success"]  # ✅ Theme-aware green
+                text_color=self.theme_colors["success"]
             )
         
         # Log summary with statistics
@@ -3226,11 +3224,11 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             self._log(f"✅ EXPORT COMPLETED SUCCESSFULLY")
             self._log(f"📊 Total: {total} reports")
         
-        self._log(f"⏱️  Duration: {elapsed_formatted}")
+        self._log(f"⏱️ Duration: {elapsed_formatted}")
         if avg_speed > 0:
             self._log(f"⚡ Average Speed: {avg_speed:.2f} reports/sec")
         
-        self._log(f"✔️  Successful: {len(successful)}")
+        self._log(f"✔️ Successful: {len(successful)}")
         self._log(f"❌ Failed: {len(failed)}")
         
         if len(failed) > 0:
@@ -3264,8 +3262,8 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             was_cancelled, completed, total, successful, failed, 
             elapsed_formatted, avg_speed, zip_path
         ))
-        
-        
+    
+ 
     # main_app.py - ADD this new method
 
     def _show_completion_dialogs(self, was_cancelled, completed, total, successful, 
@@ -3273,9 +3271,16 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         """
         Show completion dialogs (separated from state management).
         
-        ✅ Called with delay to ensure UI is stable before showing dialogs.
+        ✅ FIXED: Properly manages _showing_dialog flag to prevent lockup
         """
         print("📢 Showing completion dialogs...")
+        
+        # ✅ CRITICAL: Set dialog flag ONLY while showing dialogs
+        with self.state_lock:
+            if self._showing_dialog:
+                print("⚠️ Dialogs already showing, aborting")
+                return
+            self._showing_dialog = True
         
         try:
             # Ensure window has focus
@@ -3354,8 +3359,14 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         except Exception as e:
             print(f"❌ Error showing dialogs: {e}")
             import traceback
-            traceback.print_exc()        
+            traceback.print_exc()
         
+        finally:
+            # ✅ CRITICAL: ALWAYS reset dialog flag when done
+            with self.state_lock:
+                self._showing_dialog = False
+            
+            print("✅ Dialog flag cleared - ready for next export")
         
 
     # main_app.py - ADD this new method before _handle_cancelled_export

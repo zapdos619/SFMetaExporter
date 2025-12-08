@@ -150,7 +150,733 @@ class SalesforceExporterGUI(ctk.CTk):
     # ==================================
 
     def _setup_login_frame(self):
-        """Setup the login screen UI"""
+        """Setup the login screen UI - FIXED with proper ordering and custom domain handling"""
+        login_frame = self.login_frame
+        login_frame.columnconfigure(1, weight=1)
+
+        # Title
+        ctk.CTkLabel(
+            login_frame,
+            text="Salesforce Login",
+            font=ctk.CTkFont(size=30, weight="bold")
+        ).grid(row=0, column=0, columnspan=2, pady=(50, 40))
+
+        # ========== ROW 1: ORG TYPE ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Org Type:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Dark gray (light mode) / Light gray (dark mode)
+        ).grid(row=1, column=0, padx=10, pady=15, sticky="w")
+
+        self.org_type_var = ctk.StringVar(value="Production")
+        
+        org_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        org_container.grid(row=1, column=1, padx=10, pady=15, sticky="w")
+        
+        self.radio_prod = ctk.CTkRadioButton(
+            org_container,
+            text="Production",
+            variable=self.org_type_var,
+            value="Production"
+        )
+        self.radio_prod.grid(row=0, column=0, padx=(0, 15), sticky="w")
+        
+        self.radio_sandbox = ctk.CTkRadioButton(
+            org_container,
+            text="Sandbox/Test",
+            variable=self.org_type_var,
+            value="Sandbox"
+        )
+        self.radio_sandbox.grid(row=0, column=1, padx=(0, 0), sticky="w")
+        
+        # ========== ROW 2: CUSTOM DOMAIN CHECKBOX ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Custom Domain:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Readable in both modes
+        ).grid(row=2, column=0, padx=10, pady=15, sticky="w")
+        
+        self.custom_domain_var = ctk.BooleanVar(value=False)
+        
+        custom_domain_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        custom_domain_container.grid(row=2, column=1, padx=10, pady=15, sticky="ew")
+        custom_domain_container.grid_columnconfigure(0, weight=1)
+        
+        # Checkbox
+        self.custom_domain_check = ctk.CTkCheckBox(
+            custom_domain_container,
+            text="🌐 Use Custom Domain",
+            variable=self.custom_domain_var,
+            command=self._on_custom_domain_toggle,
+            font=ctk.CTkFont(size=12)
+        )
+        self.custom_domain_check.grid(row=0, column=0, sticky="w", pady=(0, 5))
+        
+        # ✅ FIXED: Entry field ALWAYS VISIBLE, state controlled by checkbox
+        self.custom_domain_entry = ctk.CTkEntry(
+            custom_domain_container,
+            placeholder_text="mycompany.my.salesforce.com",
+            width=350,
+            state="disabled"  # ✅ Start disabled
+        )
+        self.custom_domain_entry.grid(row=1, column=0, sticky="ew")
+        
+        # Hint label
+        ctk.CTkLabel(
+            custom_domain_container,
+            text="💡 Example: mycompany.my.salesforce.com (no https://)",
+            font=ctk.CTkFont(size=10),
+            text_color=("#7f8c8d", "#95a5a6"),  # ✅ Readable gray in both modes
+            anchor="w"
+        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+        
+        # ========== ROW 3: USERNAME ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Username:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")
+        ).grid(row=3, column=0, padx=10, pady=15, sticky="w")
+        
+        self.username_entry = ctk.CTkEntry(login_frame, width=350)
+        self.username_entry.grid(row=3, column=1, padx=10, pady=15, sticky="ew")
+        
+        # ========== ROW 4: PASSWORD ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Password:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")
+        ).grid(row=4, column=0, padx=10, pady=15, sticky="w")
+        
+        self.password_entry = ctk.CTkEntry(login_frame, width=350, show="*")
+        self.password_entry.grid(row=4, column=1, padx=10, pady=15, sticky="ew")
+        
+        # ========== ROW 5: SECURITY TOKEN (OPTIONAL) ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Security Token:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")
+        ).grid(row=5, column=0, padx=10, pady=15, sticky="w")
+        
+        token_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        token_container.grid(row=5, column=1, padx=10, pady=15, sticky="ew")
+        token_container.grid_columnconfigure(0, weight=1)
+        
+        self.token_entry = ctk.CTkEntry(
+            token_container, 
+            width=350, 
+            show="*",
+            placeholder_text="Leave blank if IP whitelisted"
+        )
+        self.token_entry.grid(row=0, column=0, sticky="ew")
+        
+        # Hint label
+        ctk.CTkLabel(
+            token_container,
+            text="💡 Optional - only needed if IP not whitelisted",
+            font=ctk.CTkFont(size=10),
+            text_color=("#7f8c8d", "#95a5a6"),
+            anchor="w"
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        # ========== ROW 6: LOGIN BUTTON ==========
+        self.login_button = ctk.CTkButton(
+            login_frame,
+            text="Login to Salesforce",
+            command=self.login_action,
+            width=150,
+            height=50,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.login_button.grid(row=6, column=0, columnspan=2, pady=50, sticky="ew", padx=10)
+    
+    
+
+
+
+
+    def _on_org_type_changed(self):
+        """Handle org type radio button change"""
+        # Disable custom domain when org type is selected
+        if self.custom_domain_var.get():
+            # User was using custom domain, keep it enabled
+            pass
+        else:
+            # Normal behavior - radio buttons control domain
+            pass
+
+    def _on_custom_domain_toggle(self):
+        """
+        Toggle custom domain entry state (enabled/disabled).
+        ✅ FIXED: Entry is always VISIBLE, only state changes.
+        """
+        if self.custom_domain_var.get():
+            # ✅ Checkbox CHECKED - Enable entry and disable radio buttons
+            self.custom_domain_entry.configure(state="normal")
+            
+            # Disable org type radio buttons
+            self.radio_prod.configure(state="disabled")
+            self.radio_sandbox.configure(state="disabled")
+            
+            # Focus on custom domain entry
+            self.custom_domain_entry.focus()
+            
+        else:
+            # ✅ Checkbox UNCHECKED - Disable entry and enable radio buttons
+            self.custom_domain_entry.configure(state="disabled")
+            
+            # Re-enable org type radio buttons
+            self.radio_prod.configure(state="normal")
+            self.radio_sandbox.configure(state="normal")
+            
+            # Clear custom domain entry
+            self.custom_domain_entry.delete(0, "end")
+
+    def _setup_login_frame(self):
+        """Setup the login screen UI - FIXED with proper ordering and custom domain handling"""
+        login_frame = self.login_frame
+        login_frame.columnconfigure(1, weight=1)
+
+        # Title
+        ctk.CTkLabel(
+            login_frame,
+            text="Salesforce Login",
+            font=ctk.CTkFont(size=30, weight="bold")
+        ).grid(row=0, column=0, columnspan=2, pady=(50, 40))
+
+        # ========== ROW 1: ORG TYPE ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Org Type:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Dark gray (light mode) / Light gray (dark mode)
+        ).grid(row=1, column=0, padx=10, pady=15, sticky="w")
+
+        self.org_type_var = ctk.StringVar(value="Production")
+        
+        org_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        org_container.grid(row=1, column=1, padx=10, pady=15, sticky="w")
+        
+        self.radio_prod = ctk.CTkRadioButton(
+            org_container,
+            text="Production",
+            variable=self.org_type_var,
+            value="Production"
+        )
+        self.radio_prod.grid(row=0, column=0, padx=(0, 15), sticky="w")
+        
+        self.radio_sandbox = ctk.CTkRadioButton(
+            org_container,
+            text="Sandbox/Test",
+            variable=self.org_type_var,
+            value="Sandbox"
+        )
+        self.radio_sandbox.grid(row=0, column=1, padx=(0, 0), sticky="w")
+        
+        # ========== ROW 2: CUSTOM DOMAIN CHECKBOX ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Custom Domain:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Readable in both modes
+        ).grid(row=2, column=0, padx=10, pady=15, sticky="w")
+        
+        self.custom_domain_var = ctk.BooleanVar(value=False)
+        
+        custom_domain_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        custom_domain_container.grid(row=2, column=1, padx=10, pady=15, sticky="ew")
+        custom_domain_container.grid_columnconfigure(0, weight=1)
+        
+        # Checkbox
+        self.custom_domain_check = ctk.CTkCheckBox(
+            custom_domain_container,
+            text="🌐 Use Custom Domain",
+            variable=self.custom_domain_var,
+            command=self._on_custom_domain_toggle,
+            font=ctk.CTkFont(size=12)
+        )
+        self.custom_domain_check.grid(row=0, column=0, sticky="w", pady=(0, 5))
+        
+        # ✅ FIXED: Entry field ALWAYS VISIBLE, state controlled by checkbox
+        self.custom_domain_entry = ctk.CTkEntry(
+            custom_domain_container,
+            placeholder_text="mycompany.my.salesforce.com",
+            width=350,
+            state="disabled"  # ✅ Start disabled
+        )
+        self.custom_domain_entry.grid(row=1, column=0, sticky="ew")
+        
+        # Hint label
+        ctk.CTkLabel(
+            custom_domain_container,
+            text="💡 Example: mycompany.my.salesforce.com (no https://)",
+            font=ctk.CTkFont(size=10),
+            text_color=("#7f8c8d", "#95a5a6"),  # ✅ Readable gray in both modes
+            anchor="w"
+        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+        
+        # ========== ROW 3: USERNAME ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Username:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")
+        ).grid(row=3, column=0, padx=10, pady=15, sticky="w")
+        
+        self.username_entry = ctk.CTkEntry(login_frame, width=350)
+        self.username_entry.grid(row=3, column=1, padx=10, pady=15, sticky="ew")
+        
+        # ========== ROW 4: PASSWORD ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Password:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")
+        ).grid(row=4, column=0, padx=10, pady=15, sticky="w")
+        
+        self.password_entry = ctk.CTkEntry(login_frame, width=350, show="*")
+        self.password_entry.grid(row=4, column=1, padx=10, pady=15, sticky="ew")
+        
+        # ========== ROW 5: SECURITY TOKEN (OPTIONAL) ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Security Token:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")
+        ).grid(row=5, column=0, padx=10, pady=15, sticky="w")
+        
+        token_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        token_container.grid(row=5, column=1, padx=10, pady=15, sticky="ew")
+        token_container.grid_columnconfigure(0, weight=1)
+        
+        self.token_entry = ctk.CTkEntry(
+            token_container, 
+            width=350, 
+            show="*",
+            placeholder_text="Leave blank if IP whitelisted"
+        )
+        self.token_entry.grid(row=0, column=0, sticky="ew")
+        
+        # Hint label
+        ctk.CTkLabel(
+            token_container,
+            text="💡 Optional - only needed if IP not whitelisted",
+            font=ctk.CTkFont(size=10),
+            text_color=("#7f8c8d", "#95a5a6"),
+            anchor="w"
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        # ========== ROW 6: LOGIN BUTTON ==========
+        self.login_button = ctk.CTkButton(
+            login_frame,
+            text="Login to Salesforce",
+            command=self.login_action,
+            width=150,
+            height=50,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.login_button.grid(row=6, column=0, columnspan=2, pady=50, sticky="ew", padx=10)
+    
+    
+
+
+
+
+    def _on_org_type_changed(self):
+        """Handle org type radio button change"""
+        # Disable custom domain when org type is selected
+        if self.custom_domain_var.get():
+            # User was using custom domain, keep it enabled
+            pass
+        else:
+            # Normal behavior - radio buttons control domain
+            pass
+
+    def _on_custom_domain_toggle(self):
+        """
+        Toggle custom domain entry state (enabled/disabled).
+        ✅ FIXED: Entry is always VISIBLE, only state changes.
+        """
+        if self.custom_domain_var.get():
+            # ✅ Checkbox CHECKED - Enable entry and disable radio buttons
+            self.custom_domain_entry.configure(state="normal")
+            
+            # Disable org type radio buttons
+            self.radio_prod.configure(state="disabled")
+            self.radio_sandbox.configure(state="disabled")
+            
+            # Focus on custom domain entry
+            self.custom_domain_entry.focus()
+            
+        else:
+            # ✅ Checkbox UNCHECKED - Disable entry and enable radio buttons
+            self.custom_domain_entry.configure(state="disabled")
+            
+            # Re-enable org type radio buttons
+            self.radio_prod.configure(state="normal")
+            self.radio_sandbox.configure(state="normal")
+            
+            # Clear custom domain entry
+            self.custom_domain_entry.delete(0, "end")
+
+    def _setup_login_frame(self):
+        """Setup the login screen UI - FIXED with proper ordering and custom domain handling"""
+        login_frame = self.login_frame
+        login_frame.columnconfigure(1, weight=1)
+
+        # Title
+        ctk.CTkLabel(
+            login_frame,
+            text="Salesforce Login",
+            font=ctk.CTkFont(size=30, weight="bold")
+        ).grid(row=0, column=0, columnspan=2, pady=(50, 40))
+
+        # ========== ROW 1: ORG TYPE ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Org Type:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Dark gray (light mode) / Light gray (dark mode)
+        ).grid(row=1, column=0, padx=10, pady=15, sticky="w")
+
+        self.org_type_var = ctk.StringVar(value="Production")
+        
+        org_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        org_container.grid(row=1, column=1, padx=10, pady=15, sticky="w")
+        
+        self.radio_prod = ctk.CTkRadioButton(
+            org_container,
+            text="Production",
+            variable=self.org_type_var,
+            value="Production"
+        )
+        self.radio_prod.grid(row=0, column=0, padx=(0, 15), sticky="w")
+        
+        self.radio_sandbox = ctk.CTkRadioButton(
+            org_container,
+            text="Sandbox/Test",
+            variable=self.org_type_var,
+            value="Sandbox"
+        )
+        self.radio_sandbox.grid(row=0, column=1, padx=(0, 0), sticky="w")
+        
+        # ========== ROW 2: CUSTOM DOMAIN CHECKBOX ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Custom Domain:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Readable in both modes
+        ).grid(row=2, column=0, padx=10, pady=15, sticky="w")
+        
+        self.custom_domain_var = ctk.BooleanVar(value=False)
+        
+        custom_domain_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        custom_domain_container.grid(row=2, column=1, padx=10, pady=15, sticky="ew")
+        custom_domain_container.grid_columnconfigure(0, weight=1)
+        
+        # Checkbox
+        self.custom_domain_check = ctk.CTkCheckBox(
+            custom_domain_container,
+            text="🌐 Use Custom Domain",
+            variable=self.custom_domain_var,
+            command=self._on_custom_domain_toggle,
+            font=ctk.CTkFont(size=12)
+        )
+        self.custom_domain_check.grid(row=0, column=0, sticky="w", pady=(0, 5))
+        
+        # ✅ FIXED: Entry field ALWAYS VISIBLE, state controlled by checkbox
+        self.custom_domain_entry = ctk.CTkEntry(
+            custom_domain_container,
+            placeholder_text="mycompany.my.salesforce.com",
+            width=350,
+            state="disabled"  # ✅ Start disabled
+        )
+        self.custom_domain_entry.grid(row=1, column=0, sticky="ew")
+        
+        # Hint label
+        ctk.CTkLabel(
+            custom_domain_container,
+            text="💡 Example: mycompany.my.salesforce.com (no https://)",
+            font=ctk.CTkFont(size=10),
+            text_color=("#7f8c8d", "#95a5a6"),  # ✅ Readable gray in both modes
+            anchor="w"
+        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+        
+        # ========== ROW 3: USERNAME ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Username:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")
+        ).grid(row=3, column=0, padx=10, pady=15, sticky="w")
+        
+        self.username_entry = ctk.CTkEntry(login_frame, width=350)
+        self.username_entry.grid(row=3, column=1, padx=10, pady=15, sticky="ew")
+        
+        # ========== ROW 4: PASSWORD ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Password:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")
+        ).grid(row=4, column=0, padx=10, pady=15, sticky="w")
+        
+        self.password_entry = ctk.CTkEntry(login_frame, width=350, show="*")
+        self.password_entry.grid(row=4, column=1, padx=10, pady=15, sticky="ew")
+        
+        # ========== ROW 5: SECURITY TOKEN (OPTIONAL) ==========
+        ctk.CTkLabel(
+            login_frame,
+            text="Security Token:",
+            anchor="w",
+            font=ctk.CTkFont(size=14),
+            text_color=("#2c3e50", "#ecf0f1")
+        ).grid(row=5, column=0, padx=10, pady=15, sticky="w")
+        
+        token_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        token_container.grid(row=5, column=1, padx=10, pady=15, sticky="ew")
+        token_container.grid_columnconfigure(0, weight=1)
+        
+        self.token_entry = ctk.CTkEntry(
+            token_container, 
+            width=350, 
+            show="*",
+            placeholder_text="Leave blank if IP whitelisted"
+        )
+        self.token_entry.grid(row=0, column=0, sticky="ew")
+        
+        # Hint label
+        ctk.CTkLabel(
+            token_container,
+            text="💡 Optional - only needed if IP not whitelisted",
+            font=ctk.CTkFont(size=10),
+            text_color=("#7f8c8d", "#95a5a6"),
+            anchor="w"
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        # ========== ROW 6: LOGIN BUTTON ==========
+        self.login_button = ctk.CTkButton(
+            login_frame,
+            text="Login to Salesforce",
+            command=self.login_action,
+            width=150,
+            height=50,
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        self.login_button.grid(row=6, column=0, columnspan=2, pady=50, sticky="ew", padx=10)
+    
+    
+
+
+
+
+    def _on_org_type_changed(self):
+        """Handle org type radio button change"""
+        # Disable custom domain when org type is selected
+        if self.custom_domain_var.get():
+            # User was using custom domain, keep it enabled
+            pass
+        else:
+            # Normal behavior - radio buttons control domain
+            pass
+
+    def _on_custom_domain_toggle(self):
+        """
+        Toggle custom domain entry state (enabled/disabled).
+        ✅ FIXED: Entry is always VISIBLE, only state changes.
+        """
+        if self.custom_domain_var.get():
+            # ✅ Checkbox CHECKED - Enable entry and disable radio buttons
+            self.custom_domain_entry.configure(state="normal")
+            
+            # Disable org type radio buttons
+            self.radio_prod.configure(state="disabled")
+            self.radio_sandbox.configure(state="disabled")
+            
+            # Focus on custom domain entry
+            self.custom_domain_entry.focus()
+            
+        else:
+            # ✅ Checkbox UNCHECKED - Disable entry and enable radio buttons
+            self.custom_domain_entry.configure(state="disabled")
+            
+            # Re-enable org type radio buttons
+            self.radio_prod.configure(state="normal")
+            self.radio_sandbox.configure(state="normal")
+            
+            # Clear custom domain entry
+            self.custom_domain_entry.delete(0, "end")
+
+    # def _setup_login_frame(self):
+    #     """Setup the login screen UI - FIXED with proper ordering and custom domain handling"""
+    #     login_frame = self.login_frame
+    #     login_frame.columnconfigure(1, weight=1)
+
+    #     # Title
+    #     ctk.CTkLabel(
+    #         login_frame,
+    #         text="Salesforce Login",
+    #         font=ctk.CTkFont(size=30, weight="bold")
+    #     ).grid(row=0, column=0, columnspan=2, pady=(50, 40))
+
+    #     # ========== ROW 1: ORG TYPE ==========
+    #     ctk.CTkLabel(
+    #         login_frame,
+    #         text="Org Type:",
+    #         anchor="w",
+    #         font=ctk.CTkFont(size=14),
+    #         text_color=("#2c3e50", "#ecf0f1")  # ✅ Dark gray (light mode) / Light gray (dark mode)
+    #     ).grid(row=1, column=0, padx=10, pady=15, sticky="w")
+
+    #     self.org_type_var = ctk.StringVar(value="Production")
+        
+    #     org_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+    #     org_container.grid(row=1, column=1, padx=10, pady=15, sticky="w")
+        
+    #     self.radio_prod = ctk.CTkRadioButton(
+    #         org_container,
+    #         text="Production",
+    #         variable=self.org_type_var,
+    #         value="Production"
+    #     )
+    #     self.radio_prod.grid(row=0, column=0, padx=(0, 15), sticky="w")
+        
+    #     self.radio_sandbox = ctk.CTkRadioButton(
+    #         org_container,
+    #         text="Sandbox/Test",
+    #         variable=self.org_type_var,
+    #         value="Sandbox"
+    #     )
+    #     self.radio_sandbox.grid(row=0, column=1, padx=(0, 0), sticky="w")
+        
+    #     # ========== ROW 2: CUSTOM DOMAIN CHECKBOX ==========
+    #     ctk.CTkLabel(
+    #         login_frame,
+    #         text="Custom Domain:",
+    #         anchor="w",
+    #         font=ctk.CTkFont(size=14),
+    #         text_color=("#2c3e50", "#ecf0f1")  # ✅ Readable in both modes
+    #     ).grid(row=2, column=0, padx=10, pady=15, sticky="w")
+        
+    #     self.custom_domain_var = ctk.BooleanVar(value=False)
+        
+    #     custom_domain_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+    #     custom_domain_container.grid(row=2, column=1, padx=10, pady=15, sticky="ew")
+    #     custom_domain_container.grid_columnconfigure(0, weight=1)
+        
+    #     # Checkbox
+    #     self.custom_domain_check = ctk.CTkCheckBox(
+    #         custom_domain_container,
+    #         text="🌐 Use Custom Domain",
+    #         variable=self.custom_domain_var,
+    #         command=self._on_custom_domain_toggle,
+    #         font=ctk.CTkFont(size=12)
+    #     )
+    #     self.custom_domain_check.grid(row=0, column=0, sticky="w", pady=(0, 5))
+        
+    #     # ✅ FIXED: Entry field ALWAYS VISIBLE, state controlled by checkbox
+    #     self.custom_domain_entry = ctk.CTkEntry(
+    #         custom_domain_container,
+    #         placeholder_text="mycompany.my.salesforce.com",
+    #         width=350,
+    #         state="disabled"  # ✅ Start disabled
+    #     )
+    #     self.custom_domain_entry.grid(row=1, column=0, sticky="ew")
+        
+    #     # Hint label
+    #     ctk.CTkLabel(
+    #         custom_domain_container,
+    #         text="💡 Example: mycompany.my.salesforce.com (no https://)",
+    #         font=ctk.CTkFont(size=10),
+    #         text_color=("#7f8c8d", "#95a5a6"),  # ✅ Readable gray in both modes
+    #         anchor="w"
+    #     ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+        
+    #     # ========== ROW 3: USERNAME ==========
+    #     ctk.CTkLabel(
+    #         login_frame,
+    #         text="Username:",
+    #         anchor="w",
+    #         font=ctk.CTkFont(size=14),
+    #         text_color=("#2c3e50", "#ecf0f1")
+    #     ).grid(row=3, column=0, padx=10, pady=15, sticky="w")
+        
+    #     self.username_entry = ctk.CTkEntry(login_frame, width=350)
+    #     self.username_entry.grid(row=3, column=1, padx=10, pady=15, sticky="ew")
+        
+    #     # ========== ROW 4: PASSWORD ==========
+    #     ctk.CTkLabel(
+    #         login_frame,
+    #         text="Password:",
+    #         anchor="w",
+    #         font=ctk.CTkFont(size=14),
+    #         text_color=("#2c3e50", "#ecf0f1")
+    #     ).grid(row=4, column=0, padx=10, pady=15, sticky="w")
+        
+    #     self.password_entry = ctk.CTkEntry(login_frame, width=350, show="*")
+    #     self.password_entry.grid(row=4, column=1, padx=10, pady=15, sticky="ew")
+        
+    #     # ========== ROW 5: SECURITY TOKEN (OPTIONAL) ==========
+    #     ctk.CTkLabel(
+    #         login_frame,
+    #         text="Security Token:",
+    #         anchor="w",
+    #         font=ctk.CTkFont(size=14),
+    #         text_color=("#2c3e50", "#ecf0f1")
+    #     ).grid(row=5, column=0, padx=10, pady=15, sticky="w")
+        
+    #     token_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+    #     token_container.grid(row=5, column=1, padx=10, pady=15, sticky="ew")
+    #     token_container.grid_columnconfigure(0, weight=1)
+        
+    #     self.token_entry = ctk.CTkEntry(
+    #         token_container, 
+    #         width=350, 
+    #         show="*",
+    #         placeholder_text="Leave blank if IP whitelisted"
+    #     )
+    #     self.token_entry.grid(row=0, column=0, sticky="ew")
+        
+    #     # Hint label
+    #     ctk.CTkLabel(
+    #         token_container,
+    #         text="💡 Optional - only needed if IP not whitelisted",
+    #         font=ctk.CTkFont(size=10),
+    #         text_color=("#7f8c8d", "#95a5a6"),
+    #         anchor="w"
+    #     ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+    #     # ========== ROW 6: LOGIN BUTTON ==========
+    #     self.login_button = ctk.CTkButton(
+    #         login_frame,
+    #         text="Login to Salesforce",
+    #         command=self.login_action,
+    #         width=150,
+    #         height=50,
+    #         font=ctk.CTkFont(size=16, weight="bold")
+    #     )
+    #     self.login_button.grid(row=6, column=0, columnspan=2, pady=50, sticky="ew", padx=10)
+    
+    def _setup_login_frame(self):
+        """Setup the login screen UI - ENHANCED with Custom Domain & Optional Token"""
         login_frame = self.login_frame
         login_frame.columnconfigure(1, weight=1)
 
@@ -171,10 +897,43 @@ class SalesforceExporterGUI(ctk.CTk):
             entry.grid(row=row, column=1, padx=10, pady=15, sticky="ew")
             return entry
 
+        # Username
         self.username_entry = create_input_row(login_frame, 1, "Username:")
+        
+        # Password
         self.password_entry = create_input_row(login_frame, 2, "Password:", password_mode=True)
-        self.token_entry = create_input_row(login_frame, 3, "Security Token:", password_mode=True)
+        
+        # ✅ NEW: Security Token (Optional)
+        ctk.CTkLabel(
+            login_frame,
+            text="Security Token:",
+            anchor="w",
+            font=ctk.CTkFont(size=14)
+        ).grid(row=3, column=0, padx=10, pady=15, sticky="w")
+        
+        # Token entry with container for hint
+        token_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        token_container.grid(row=3, column=1, padx=10, pady=15, sticky="ew")
+        token_container.grid_columnconfigure(0, weight=1)
+        
+        self.token_entry = ctk.CTkEntry(
+            token_container, 
+            width=350, 
+            show="*",
+            placeholder_text="Leave blank if IP whitelisted"
+        )
+        self.token_entry.grid(row=0, column=0, sticky="ew")
+        
+        # Hint label
+        ctk.CTkLabel(
+            token_container,
+            text="💡 Optional - only needed if IP not whitelisted",
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            anchor="w"
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
 
+        # ✅ NEW: Org Type Section (moved down)
         ctk.CTkLabel(
             login_frame,
             text="Org Type:",
@@ -183,22 +942,62 @@ class SalesforceExporterGUI(ctk.CTk):
         ).grid(row=4, column=0, padx=10, pady=15, sticky="w")
 
         self.org_type_var = ctk.StringVar(value="Production")
+        
+        org_container = ctk.CTkFrame(login_frame, fg_color="transparent")
+        org_container.grid(row=4, column=1, padx=10, pady=15, sticky="w")
+        
         radio_prod = ctk.CTkRadioButton(
-            login_frame,
+            org_container,
             text="Production",
             variable=self.org_type_var,
-            value="Production"
+            value="Production",
+            command=self._on_org_type_changed
         )
+        radio_prod.grid(row=0, column=0, padx=(0, 5), sticky="w")
+        
         radio_test = ctk.CTkRadioButton(
-            login_frame,
+            org_container,
             text="Sandbox/Test",
             variable=self.org_type_var,
-            value="Sandbox"
+            value="Sandbox",
+            command=self._on_org_type_changed
         )
+        radio_test.grid(row=0, column=1, padx=(5, 0), sticky="w")
 
-        radio_prod.grid(row=4, column=1, padx=(10, 5), pady=15, sticky="w")
-        radio_test.grid(row=4, column=1, padx=(140, 10), pady=15, sticky="w")
+        # ✅ NEW: Custom Domain Checkbox
+        self.custom_domain_var = ctk.BooleanVar(value=False)
+        self.custom_domain_check = ctk.CTkCheckBox(
+            login_frame,
+            text="🌐 Use Custom Domain",
+            variable=self.custom_domain_var,
+            command=self._on_custom_domain_toggle,
+            font=ctk.CTkFont(size=12)
+        )
+        self.custom_domain_check.grid(row=5, column=1, padx=10, pady=(5, 5), sticky="w")
 
+        # ✅ NEW: Custom Domain Entry (hidden initially)
+        self.custom_domain_frame = ctk.CTkFrame(login_frame, fg_color="transparent")
+        self.custom_domain_frame.grid(row=6, column=1, padx=10, pady=(0, 15), sticky="ew")
+        self.custom_domain_frame.grid_columnconfigure(0, weight=1)
+        self.custom_domain_frame.grid_remove()  # Hidden initially
+        
+        self.custom_domain_entry = ctk.CTkEntry(
+            self.custom_domain_frame,
+            placeholder_text="mycompany.my",
+            width=350
+        )
+        self.custom_domain_entry.grid(row=0, column=0, sticky="ew")
+        
+        # Example hint
+        ctk.CTkLabel(
+            self.custom_domain_frame,
+            text="📋 Example: mycompany.my (no https://)",
+            font=ctk.CTkFont(size=10),
+            text_color="#1f6aa5",
+            anchor="w"
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        # Login Button
         self.login_button = ctk.CTkButton(
             login_frame,
             text="Login to Salesforce",
@@ -207,21 +1006,122 @@ class SalesforceExporterGUI(ctk.CTk):
             height=50,
             font=ctk.CTkFont(size=16, weight="bold")
         )
-        self.login_button.grid(row=5, column=0, columnspan=2, pady=50, sticky="ew", padx=10)
+        self.login_button.grid(row=7, column=0, columnspan=2, pady=50, sticky="ew", padx=10)
+
+
+
+
+
+
+    def _on_org_type_changed(self):
+        """Handle org type radio button change"""
+        # Disable custom domain when org type is selected
+        if self.custom_domain_var.get():
+            # User was using custom domain, keep it enabled
+            pass
+        else:
+            # Normal behavior - radio buttons control domain
+            pass
+        
+    def _on_custom_domain_toggle(self):
+        """Toggle custom domain entry visibility"""
+        if self.custom_domain_var.get():
+            # Show custom domain entry
+            self.custom_domain_frame.grid()
+            
+            # Disable org type radio buttons
+            for widget in self.login_frame.winfo_children():
+                if isinstance(widget, ctk.CTkFrame):
+                    for child in widget.winfo_children():
+                        if isinstance(child, ctk.CTkRadioButton):
+                            child.configure(state="disabled")
+            
+            # Focus on custom domain entry
+            self.custom_domain_entry.focus()
+        else:
+            # Hide custom domain entry
+            self.custom_domain_frame.grid_remove()
+            
+            # Re-enable org type radio buttons
+            for widget in self.login_frame.winfo_children():
+                if isinstance(widget, ctk.CTkFrame):
+                    for child in widget.winfo_children():
+                        if isinstance(child, ctk.CTkRadioButton):
+                            child.configure(state="normal")
+            
+            # Clear custom domain entry
+            self.custom_domain_entry.delete(0, "end")
+
+
+
 
     def login_action(self):
-        """Handle login button click"""
+        """Handle login button click - ENHANCED with Custom Domain support and Suffix Fix"""
         self.login_button.configure(state="disabled", text="Connecting...")
 
         username = self.username_entry.get().strip()
         password = self.password_entry.get().strip()
         token = self.token_entry.get().strip()
-        domain = 'test' if self.org_type_var.get() == 'Sandbox' else 'login'
+        
+        # ✅ ENHANCED: Determine domain based on custom domain checkbox
+        if self.custom_domain_var.get():
+            # Custom domain mode
+            domain = self.custom_domain_entry.get().strip()
+            
+            if not domain:
+                messagebox.showerror("Input Error", "Please enter your custom Salesforce domain.")
+                self.login_button.configure(state="normal", text="Login to Salesforce")
+                self.custom_domain_entry.focus()
+                return
+            
+            # ✅ Clean up domain input
+            domain = domain.lower()
+            
+            # Remove https:// or http:// if user added it
+            if domain.startswith("https://"):
+                domain = domain[8:]
+            elif domain.startswith("http://"):
+                domain = domain[7:]
+            
+            # Remove trailing slashes
+            domain = domain.rstrip('/')
+            
+            # ✅ Validate domain format
+            valid_suffixes = ["salesforce.com", "force.com", "cloudforce.com"]
+            is_valid = any(suffix in domain for suffix in valid_suffixes)
+            
+            if not is_valid:
+                messagebox.showerror(
+                    "Invalid Domain", 
+                    "Custom domain must be a valid Salesforce domain.\n\n"
+                    "Examples:\n"
+                    "• mycompany.my.salesforce.com\n"
+                    "• mycompany.lightning.force.com"
+                )
+                self.login_button.configure(state="normal", text="Login to Salesforce")
+                self.custom_domain_entry.focus()
+                return
+            
+            # ✅ CRITICAL FIX: Strip .salesforce.com suffix
+            # The simple_salesforce library automatically appends '.salesforce.com' to the domain argument.
+            # If we pass 'my.salesforce.com', it becomes 'my.salesforce.com.salesforce.com'.
+            # We must strip it here before passing it to the client.
+            if domain.endswith(".salesforce.com"):
+                domain = domain[:-15]  # Removes the last 15 characters (.salesforce.com)
 
-        if not all([username, password, token]):
-            messagebox.showerror("Input Error", "All fields (Username, Password, Security Token) are required.")
+        else:
+            # Standard mode (Production or Sandbox)
+            domain = 'test' if self.org_type_var.get() == 'Sandbox' else 'login'
+
+        # ✅ ENHANCED: Token is now optional
+        if not all([username, password]):
+            messagebox.showerror("Input Error", "Username and Password are required.")
             self.login_button.configure(state="normal", text="Login to Salesforce")
             return
+        
+        # ✅ INFO: Show message if token is empty
+        if not token:
+            self.update_status("ℹ️ Logging in without security token (IP must be whitelisted)")
 
         # Run login in background thread
         def do_login():
@@ -229,7 +1129,7 @@ class SalesforceExporterGUI(ctk.CTk):
                 self.sf_client = SalesforceClient(
                     username=username,
                     password=password,
-                    security_token=token,
+                    security_token=token,  # Can be empty string now
                     domain=domain,
                     status_callback=self.update_status
                 )
@@ -246,13 +1146,75 @@ class SalesforceExporterGUI(ctk.CTk):
 
             except Exception as e:
                 # Handle error on main thread
-                self.after(0, lambda: self._on_login_error(str(e)))
+                error_message = str(e);
+                self.after(0, lambda: self._on_login_error(error_message))
 
         ThreadHelper.run_in_thread(do_login)
+  
+        
+    def _show_login_status(self, message: str, color: str = "gray"):
+        """
+        Show status message during login process
+        
+        Args:
+            message: Status message to display
+            color: Text color (gray, green, red, orange)
+        """
+        try:
+            # Update the status textbox with colored message
+            self.status_textbox.configure(state="normal")
+            
+            timestamp = datetime.now().strftime("[%H:%M:%S]")
+            
+            # Add colored indicator
+            if color == "green":
+                indicator = "✅"
+            elif color == "red":
+                indicator = "❌"
+            elif color == "orange":
+                indicator = "⚠️"
+            else:
+                indicator = "ℹ️"
+            
+            log_msg = f"{timestamp} {indicator} {message}\n"
+            
+            self.status_textbox.insert("end", log_msg)
+            self.status_textbox.see("end")
+            self.status_textbox.configure(state="disabled")
+            
+            print(log_msg.strip())
+            
+        except Exception as e:
+            print(f"⚠️ Status update error: {e}")
+        
+
 
     def _on_login_success(self):
-        """Called after successful login"""
-        messagebox.showinfo("Success", "Successfully connected to Salesforce!")
+        """Called after successful login - ENHANCED with detailed info"""
+        
+        # Determine connection type
+        if self.custom_domain_var.get():
+            connection_type = "Custom Domain"
+            domain_used = self.custom_domain_entry.get().strip()
+        else:
+            connection_type = self.org_type_var.get()
+            domain_used = 'login.salesforce.com' if connection_type == 'Production' else 'test.salesforce.com'
+        
+        # Check if token was used
+        token_status = "with token" if self.token_entry.get().strip() else "without token (IP whitelisted)"
+        
+        # Build success message
+        success_msg = (
+            f"Successfully connected to Salesforce!\n\n"
+            f"Connection Details:\n"
+            f"• Type: {connection_type}\n"
+            f"• Domain: {domain_used}\n"
+            f"• Instance: {self.sf_client.base_url}\n"
+            f"• API Version: v{self.sf_client.api_version}\n"
+            f"• Authentication: {token_status}"
+        )
+        
+        messagebox.showinfo("Success", success_msg)
 
         # Switch to Export Frame
         self.login_frame.grid_forget()
@@ -264,17 +1226,141 @@ class SalesforceExporterGUI(ctk.CTk):
         # Initialize SOQL Runner
         self.soql_runner = SOQLRunner(self.sf_client)
         
-        # Initialize Metadata Switch Manager (NEW)
+        # Initialize Metadata Switch Manager
         self.metadata_switch_manager = MetadataSwitchManager(
             self.sf_client.sf,
             status_callback=self.update_status
         )
+        
+        # Log detailed connection info
+        self.update_status("=" * 60)
+        self.update_status(f"✅ CONNECTED TO SALESFORCE")
+        self.update_status(f"📊 Connection Type: {connection_type}")
+        self.update_status(f"🌐 Domain: {domain_used}")
+        self.update_status(f"🔗 Instance: {self.sf_client.base_url}")
+        self.update_status(f"📡 API Version: v{self.sf_client.api_version}")
+        self.update_status(f"🔐 Authentication: {token_status}")
+        self.update_status(f"📦 Objects Found: {len(self.all_org_objects)}")
+        self.update_status("=" * 60)
+
+
+    def _make_login_error_friendly(self, error_msg: str) -> str:
+        """
+        Convert technical error messages to user-friendly ones
+        
+        Args:
+            error_msg: Technical error message from Salesforce/Python
+            
+        Returns:
+            User-friendly error message
+        """
+        error_lower = error_msg.lower()
+        
+        # Custom domain specific errors (DNS / Resolution)
+        if "getaddrinfo failed" in error_lower or "nameresolutionerror" in error_lower:
+             return (
+                "Cannot reach the Custom Domain.\n\n"
+                "Possible causes:\n"
+                "1. The domain name is spelled incorrectly.\n"
+                "2. The domain does not exist.\n"
+                "3. Your internet connection is unstable.\n\n"
+                "Please double-check the 'Custom Domain' field."
+            )
+
+        if "custom domain" in error_lower or "cannot connect to custom domain" in error_lower:
+            return (
+                "Cannot connect to custom domain.\n\n"
+                "Please verify:\n"
+                "• Domain spelling is correct\n"
+                "• Domain is active in Salesforce\n"
+                "• No https:// prefix in domain\n\n"
+                "Example: mycompany.my.salesforce.com"
+            )
+        
+        # IP whitelisting errors (when token is missing but needed)
+        if "invalid_grant" in error_lower and "security token" not in error_msg:
+            return (
+                "Login failed - Security token may be required.\n\n"
+                "Your IP address might not be whitelisted.\n"
+                "Please enter your security token or contact your admin."
+            )
+        
+        # Standard error translations
+        if "invalid username" in error_lower or "invalid login" in error_lower:
+            return "Invalid username or password"
+        
+        elif "security token" in error_lower or "invalid_grant" in error_lower:
+            return (
+                "Invalid credentials.\n\n"
+                "If your IP is not whitelisted, you must provide a security token.\n"
+                "Security token should be appended to your password or entered separately."
+            )
+        
+        elif "locked" in error_lower:
+            return "Account is locked. Contact your Salesforce administrator"
+        
+        elif "network" in error_lower or "connection" in error_lower:
+            return "Network connection failed. Check your internet connection"
+        
+        elif "timeout" in error_lower:
+            return "Connection timed out. Try again or check your internet"
+        
+        elif "403" in error_msg or "forbidden" in error_lower:
+            return "Access denied. Check custom domain or credentials"
+        
+        elif "404" in error_msg or "not found" in error_lower:
+            return "Login URL not found. Verify custom domain spelling"
+        
+        elif "500" in error_msg or "502" in error_msg or "503" in error_msg:
+            return "Salesforce server error. Try again in a few minutes"
+        
+        else:
+            # Return shortened version of original error
+            if len(error_msg) > 150:
+                return error_msg[:147] + "..."
+            return error_msg
+
 
     def _on_login_error(self, error_message):
-        """Called when login fails"""
-        messagebox.showerror("Login Failed", f"Connection Error: {error_message}")
+        """Called when login fails - ENHANCED with smart focus and friendly messages"""
+        
+        # Ensure error_message is a string and not empty
+        error_message = str(error_message) if error_message else "An unknown error occurred during login."
+        
+        # Convert to friendly message
+        friendly_msg = self._make_login_error_friendly(error_message)
+        
+        # Show error dialog
+        messagebox.showerror("Login Failed", friendly_msg)
+        
+        # Log technical error for debugging
+        self.update_status("=" * 60)
+        self.update_status("❌ LOGIN FAILED")
+        self.update_status(f"Error: {error_message}") # Will now show the actual error
+        self.update_status("=" * 60)
+        
+        # ... (rest of the logic for resetting state and Smart Focus remains the same)
+        # Reset state
         self.sf_client = None
         self.login_button.configure(state="normal", text="Login to Salesforce")
+        
+        # Smart Focus: Check both raw error and friendly message to decide where to focus
+        err_combined = (error_message + friendly_msg).lower()
+        
+        if any(x in err_combined for x in ["custom domain", "dns", "resolve", "addrinfo", "nameresolutionerror"]):
+            # Focus Custom Domain if it was a domain/DNS issue
+            if self.custom_domain_var.get():
+                self.custom_domain_entry.focus()
+                self.custom_domain_entry.select_range(0, 'end')
+        elif "token" in err_combined and not self.token_entry.get().strip():
+            self.token_entry.focus()
+        elif "password" in err_combined or "credential" in err_combined:
+            self.password_entry.focus()
+            self.password_entry.delete(0, "end")
+        else:
+            self.username_entry.focus()
+
+
 
     # ==================================
     # Screen 2: Object Selection & Export
