@@ -1244,121 +1244,106 @@ class SalesforceExporterGUI(ctk.CTk):
         self.update_status("=" * 60)
 
 
-    def _make_login_error_friendly(self, error_msg: str) -> str:
+    def _make_login_error_friendly(self, error_msg: str) -> tuple[str, str]:
         """
-        Convert technical error messages to user-friendly ones
-        
-        Args:
-            error_msg: Technical error message from Salesforce/Python
-            
-        Returns:
-            User-friendly error message
+        Convert technical error messages to user-friendly ones.
+        Returns a tuple: (Short Friendly Message for Popup, Detailed Log Message).
         """
         error_lower = error_msg.lower()
-        
-        # Custom domain specific errors (DNS / Resolution)
-        if "getaddrinfo failed" in error_lower or "nameresolutionerror" in error_lower:
-             return (
-                "Cannot reach the Custom Domain.\n\n"
-                "Possible causes:\n"
-                "1. The domain name is spelled incorrectly.\n"
-                "2. The domain does not exist.\n"
-                "3. Your internet connection is unstable.\n\n"
-                "Please double-check the 'Custom Domain' field."
-            )
+        friendly_text = "❌ An unexpected error occurred." # Default short message
 
-        if "custom domain" in error_lower or "cannot connect to custom domain" in error_lower:
-            return (
-                "Cannot connect to custom domain.\n\n"
-                "Please verify:\n"
-                "• Domain spelling is correct\n"
-                "• Domain is active in Salesforce\n"
-                "• No https:// prefix in domain\n\n"
-                "Example: mycompany.my.salesforce.com"
-            )
-        
-        # IP whitelisting errors (when token is missing but needed)
-        if "invalid_grant" in error_lower and "security token" not in error_msg:
-            return (
-                "Login failed - Security token may be required.\n\n"
-                "Your IP address might not be whitelisted.\n"
-                "Please enter your security token or contact your admin."
-            )
-        
-        # Standard error translations
-        if "invalid username" in error_lower or "invalid login" in error_lower:
-            return "Invalid username or password"
-        
-        elif "security token" in error_lower or "invalid_grant" in error_lower:
-            return (
-                "Invalid credentials.\n\n"
-                "If your IP is not whitelisted, you must provide a security token.\n"
-                "Security token should be appended to your password or entered separately."
-            )
-        
-        elif "locked" in error_lower:
-            return "Account is locked. Contact your Salesforce administrator"
-        
-        elif "network" in error_lower or "connection" in error_lower:
-            return "Network connection failed. Check your internet connection"
-        
-        elif "timeout" in error_lower:
-            return "Connection timed out. Try again or check your internet"
-        
-        elif "403" in error_msg or "forbidden" in error_lower:
-            return "Access denied. Check custom domain or credentials"
-        
-        elif "404" in error_msg or "not found" in error_lower:
-            return "Login URL not found. Verify custom domain spelling"
-        
-        elif "500" in error_msg or "502" in error_msg or "503" in error_msg:
-            return "Salesforce server error. Try again in a few minutes"
-        
+        # --- LOG MESSAGE PREPARATION ---
+        # The log message contains the full details for the status bar.
+        # We include a safety truncation for excessively long logs (e.g., HTML response).
+        MAX_LOG_LEN = 1000
+        if len(error_msg) > MAX_LOG_LEN:
+            tech_log_display = error_msg[:MAX_LOG_LEN] + f"\n... [Truncated {len(error_msg)-MAX_LOG_LEN} more chars]"
         else:
-            # Return shortened version of original error
-            if len(error_msg) > 150:
-                return error_msg[:147] + "..."
-            return error_msg
+            tech_log_display = error_msg
 
+        detailed_log_message = (
+            f"❌ LOGIN FAILED\n"
+            f"{'-'*40}\n"
+            f"Technical Details:\n{tech_log_display}"
+        )
+        
+        # --- SHORT POPUP MESSAGE DETERMINATION ---
+        
+        # 1. Custom Domain / DNS Errors
+        is_dns_issue = any(x in error_lower for x in ["nameresolutionerror", "getaddrinfo", "name or service not known"])
+        is_connection_issue = "max retries exceeded" in error_lower or "connectionerror" in error_lower
+
+        if self.custom_domain_var.get() and (is_dns_issue or is_connection_issue):
+             friendly_text = (
+                "⚠️ Could not find the Custom Domain. "
+                "Please check the spelling carefully. See log for full details."
+            )
+
+        # 2. IP Whitelisting / Security Token
+        elif "invalid_grant" in error_lower and "security token" not in error_msg:
+            friendly_text = (
+                "⚠️ Login Rejected (Security Token Required). "
+                "Append your Security Token to your password or use the token field."
+            )
+        
+        # 3. Invalid Password/Username
+        elif "invalid username" in error_lower or "invalid login" in error_lower or "authentication failure" in error_lower:
+            friendly_text = "❌ Invalid username or password."
+        
+        # 4. Locked Account
+        elif "locked" in error_lower:
+            friendly_text = "🔒 Account is locked. Please contact your Salesforce administrator."
+        
+        # 5. Generic Network/Timeout
+        elif "timeout" in error_lower:
+            friendly_text = "⏱️ Connection timed out. Try again or check your internet."
+        
+        # 6. Generic 404/403
+        elif "404" in error_msg or "not found" in error_lower:
+             friendly_text = "❌ The requested resource was not found (404)."
+        
+        # Return the short message for the popup and the detailed message for the log
+        return friendly_text, detailed_log_message
 
     def _on_login_error(self, error_message):
-        """Called when login fails - ENHANCED with smart focus and friendly messages"""
+        """Called when login fails - Now uses the short message for the popup and detailed for the log."""
         
         # Ensure error_message is a string and not empty
         error_message = str(error_message) if error_message else "An unknown error occurred during login."
         
-        # Convert to friendly message
-        friendly_msg = self._make_login_error_friendly(error_message)
+        # Get the friendly message for the popup and the detailed log message
+        popup_msg, detailed_log_msg = self._make_login_error_friendly(error_message)
         
-        # Show error dialog
-        messagebox.showerror("Login Failed", friendly_msg)
+        # 1. Show short error dialog for the user
+        messagebox.showerror("Login Failed", popup_msg)
         
-        # Log technical error for debugging
+        # 2. Log full technical details to the status bar (where the user can scroll)
         self.update_status("=" * 60)
-        self.update_status("❌ LOGIN FAILED")
-        self.update_status(f"Error: {error_message}") # Will now show the actual error
+        self.update_status(detailed_log_msg) 
         self.update_status("=" * 60)
         
-        # ... (rest of the logic for resetting state and Smart Focus remains the same)
         # Reset state
         self.sf_client = None
         self.login_button.configure(state="normal", text="Login to Salesforce")
         
-        # Smart Focus: Check both raw error and friendly message to decide where to focus
-        err_combined = (error_message + friendly_msg).lower()
+        # Smart Focus: Decide where to put cursor based on the RAW error content
+        err_lower = error_message.lower()
         
-        if any(x in err_combined for x in ["custom domain", "dns", "resolve", "addrinfo", "nameresolutionerror"]):
-            # Focus Custom Domain if it was a domain/DNS issue
-            if self.custom_domain_var.get():
-                self.custom_domain_entry.focus()
-                self.custom_domain_entry.select_range(0, 'end')
-        elif "token" in err_combined and not self.token_entry.get().strip():
+        # If it looks like a domain/DNS issue and Custom Domain is checked -> Focus Domain field
+        is_dns_error = any(x in err_lower for x in ["nameresolutionerror", "getaddrinfo", "max retries", "connectionerror"])
+        
+        if self.custom_domain_var.get() and is_dns_error:
+            self.custom_domain_entry.focus()
+            self.custom_domain_entry.select_range(0, 'end')
+            
+        # If token/IP issue -> Focus Token field
+        elif "token" in err_lower or "invalid_grant" in err_lower:
             self.token_entry.focus()
-        elif "password" in err_combined or "credential" in err_combined:
+            
+        # Otherwise (Password/Username) -> Focus Password field
+        else:
             self.password_entry.focus()
             self.password_entry.delete(0, "end")
-        else:
-            self.username_entry.focus()
 
 
 

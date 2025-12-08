@@ -80,14 +80,12 @@ class SalesforceClient:
         except Exception as e:
             error_msg = str(e)
             
-            # ✅ ENHANCED: Better error messages for custom domain issues
-            if is_custom_domain and ("dns" in error_msg.lower() or "not found" in error_msg.lower()):
-                self._log_status(f"❌ Custom domain not found: {domain}.salesforce.com")
-                raise Exception(f"Cannot connect to custom domain '{domain}.salesforce.com'. Please verify the domain spelling.")
+            # ✅ UPDATED: We removed the custom exception masking here.
+            # We now Log the error, but we let the RAW exception propagate 
+            # so the GUI can display the full "Technical Details" along with the friendly message.
             
             self._log_status(f"❌ Connection failed: {error_msg}")
             raise
- 
  
 
     def _fetch_all_org_objects(self):
