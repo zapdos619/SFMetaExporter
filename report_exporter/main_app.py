@@ -230,7 +230,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         # Center window on screen
         self.after(100, self._center_window)
-        self.after(1000, self._check_excel_dependencies)
+       
         
         # Start queue processor
         self._process_queue()
@@ -1072,6 +1072,17 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         )
         self.excel_radio.pack(side="left")
         
+        # ✅ NEW: Add helpful note about Excel warning
+        excel_note = ctk.CTkLabel(
+            right_column,
+            text="💡 Note: Excel may show a security warning when opening .xls files - this is normal, click 'Yes' to open",
+            font=ctk.CTkFont(size=10),
+            text_color=self.theme_colors["fg_text_dim"],
+            wraplength=400,
+            justify="left"
+        )
+        excel_note.grid(row=1, column=1, sticky="w", padx=(15, 15), pady=(0, 5))
+        
         # ========== RIGHT COLUMN - ROW 1: Export/Cancel Button ==========
         # ✅ UPDATED: Increased top padding from 0 to 10 to match left column row separation
         button_container = ctk.CTkFrame(right_column, fg_color="transparent")
@@ -1166,13 +1177,12 @@ class SalesforceExporterApp(ctk.CTkToplevel):
 
 
 
-    
     def _on_format_changed(self):
         """
         Handle export format radio button change.
         Updates filename extension.
         
-        ✅ UPDATED: Removed format_description label updates
+        ✅ UPDATED: Now supports native Excel export from Salesforce API
         """
         selected_format = self.export_format.get()
         
@@ -1184,8 +1194,12 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             # Change to .zip (CSV exports are zipped)
             if current_filename.endswith('.xlsx.zip'):
                 new_filename = current_filename.replace('.xlsx.zip', '.zip')
+            elif current_filename.endswith('.xls.zip'):
+                new_filename = current_filename.replace('.xls.zip', '.zip')
             elif current_filename.endswith('.xlsx'):
                 new_filename = current_filename.replace('.xlsx', '.zip')
+            elif current_filename.endswith('.xls'):
+                new_filename = current_filename.replace('.xls', '.zip')
             elif not current_filename.endswith('.zip'):
                 # Remove any extension and add .zip
                 base_name = current_filename.rsplit('.', 1)[0] if '.' in current_filename else current_filename
@@ -1196,31 +1210,31 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             self._log("📄 Export format: CSV (zipped)")
             
         else:  # xlsx
-            # Change to .xlsx.zip (Excel exports are also zipped)
-            if current_filename.endswith('.zip') and not current_filename.endswith('.xlsx.zip'):
-                new_filename = current_filename.replace('.zip', '.xlsx.zip')
-            elif not current_filename.endswith('.xlsx.zip'):
-                # Remove any extension and add .xlsx.zip
+            # Change to .xls.zip (Native Excel exports are also zipped)
+            if current_filename.endswith('.zip') and not current_filename.endswith('.xls.zip'):
+                new_filename = current_filename.replace('.zip', '.xls.zip')
+            elif not current_filename.endswith('.xls.zip'):
+                # Remove any extension and add .xls.zip
                 base_name = current_filename.rsplit('.', 1)[0] if '.' in current_filename else current_filename
-                new_filename = f"{base_name}.xlsx.zip"
+                new_filename = f"{base_name}.xls.zip"
             else:
                 new_filename = current_filename
             
-            self._log("📊 Export format: Excel (.xlsx, zipped)")
+            self._log("📊 Export format: Native Excel (.xls, preserves formatting)")
         
         # Update filename entry
         self.filename_entry.delete(0, "end")
         self.filename_entry.insert(0, new_filename)
         
         # Update export button state
-        self._update_export_button_state()
-    
+        self._update_export_button_state()    
+
     
     def _generate_default_filename(self):
         """
         Generate default filename with timestamp.
         
-        ✅ UPDATED: Now considers export format
+        ✅ UPDATED: Now uses .xls.zip for native Excel format
         """
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M')
         
@@ -1264,7 +1278,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         
         # Validate filename has correct extension
         selected_format = self.export_format.get()
-        
+
         if selected_format == "xlsx":
             if not filename.endswith('.xlsx.zip'):
                 return (False, "Filename must end with .xlsx.zip for Excel format")
@@ -2335,29 +2349,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         self._update_export_button_state()
     
     
-    def _check_excel_dependencies(self):
-        """
-        Check if Excel export dependencies are installed.
-        Shows a warning if missing but doesn't block the app.
-        
-        ✅ Called during app initialization
-        ✅ UPDATED: Removed format_description updates
-        """
-        try:
-            import openpyxl
-            self._excel_available = True
-            self._log("✅ Excel export available (openpyxl installed)")
-        except ImportError:
-            self._excel_available = False
-            self._log("⚠️ Excel export unavailable - openpyxl not installed")
-            self._log("💡 Install with: pip install openpyxl")
-            
-            # Disable Excel radio button
-            try:
-                self.excel_radio.configure(state="disabled")
-                # ✅ REMOVED: format_description label updates (no longer exists)
-            except:
-                pass
+
     
     
     def _on_report_checkbox_changed_virtual(self, report_id: str, report_name: str, folder_id: str, checkbox_var: ctk.BooleanVar):
@@ -2674,14 +2666,14 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         selected_format = self.export_format.get()
         
         if selected_format == "xlsx":
-            if not filename.endswith('.xlsx.zip'):
+            if not filename.endswith('.xls.zip'):
                 # Fix extension
-                base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
-                filename = f"{base_name}.xlsx.zip"
+                base_name = filename.replace('.xlsx.zip', '').replace('.xls.zip', '').replace('.zip', '')
+                filename = f"{base_name}.xls.zip"
         else:
-            if not filename.endswith('.zip') or filename.endswith('.xlsx.zip'):
+            if not filename.endswith('.zip') or filename.endswith('.xls.zip') or filename.endswith('.xlsx.zip'):
                 # Fix extension
-                base_name = filename.replace('.xlsx.zip', '').replace('.zip', '')
+                base_name = filename.replace('.xlsx.zip', '').replace('.xls.zip', '').replace('.zip', '')
                 filename = f"{base_name}.zip"
         
         # Open directory dialog
@@ -2851,12 +2843,12 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             
             # Validate and fix filename extension if needed
             if selected_format == "xlsx":
-                if not filename.endswith('.xlsx.zip'):
-                    base_name = filename.replace('.xlsx.zip', '').replace('.zip', '')
-                    filename = f"{base_name}.xlsx.zip"
+                if not filename.endswith('.xls.zip'):
+                    base_name = filename.replace('.xlsx.zip', '').replace('.xls.zip', '').replace('.zip', '')
+                    filename = f"{base_name}.xls.zip"
             else:
-                if not filename.endswith('.zip') or filename.endswith('.xlsx.zip'):
-                    base_name = filename.replace('.xlsx.zip', '').replace('.zip', '')
+                if not filename.endswith('.zip') or filename.endswith('.xls.zip') or filename.endswith('.xlsx.zip'):
+                    base_name = filename.replace('.xlsx.zip', '').replace('.xls.zip', '').replace('.zip', '')
                     filename = f"{base_name}.zip"
             
             # ✅ NEW: Check for filename conflicts and auto-resolve
@@ -3606,14 +3598,16 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         if not os.path.exists(full_path):
             return base_filename
         
-        # File exists - need to append counter
         # Extract name and extension
         if '.' in base_filename:
             name_part, ext_part = base_filename.rsplit('.', 1)
-            # Handle .xlsx.zip case
-            if ext_part == 'zip' and name_part.endswith('.xlsx'):
+            # Handle .xls.zip or .xlsx.zip case
+            if ext_part == 'zip' and name_part.endswith('.xls'):
+                name_part = name_part[:-4]  # Remove .xls
+                ext_part = 'xls.zip'
+            elif ext_part == 'zip' and name_part.endswith('.xlsx'):
                 name_part = name_part[:-5]  # Remove .xlsx
-                ext_part = 'xlsx.zip'
+                ext_part = 'xls.zip'  # Standardize to .xls.zip
         else:
             name_part = base_filename
             ext_part = ''
