@@ -1548,10 +1548,19 @@ class SalesforceReportExporter:
                 
                 # ===== WRITE DETAIL ROWS =====
                 detail_rows = []
-                
+
+                # ✅ FIX: Salesforce factMap uses "key!T" format, not just "key"
+                # Groups have keys like "0", but factMap stores them as "0!T"
+                if key:
+                    fact_map_key = f"{key}!T"
+                else:
+                    fact_map_key = key
+
                 # Try to get from API first
-                fact_data = fact_map.get(key, {})
+                fact_data = fact_map.get(fact_map_key, {})
                 api_rows = fact_data.get('rows', [])
+                
+                print(f"{'  '*(level+1)}🔍 DEBUG: fact_map_key='{fact_map_key}', fact_data keys={list(fact_data.keys())}, rows={len(api_rows)}")
                 
                 if api_rows:
                     # API provided rows
