@@ -1062,20 +1062,21 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         self.csv_radio.pack(side="left", padx=(0, 20))
         
         # Excel Radio Button
+        # Excel Radio Button
         self.excel_radio = ctk.CTkRadioButton(
             radio_container,
-            text="Excel Format (.xlsx)",
+            text="Excel Format (.xlsx) ",
             variable=self.export_format,
             value="xlsx",
             font=ctk.CTkFont(size=12),
             command=self._on_format_changed
         )
         self.excel_radio.pack(side="left")
-        
-        # ✅ NEW: Add helpful note about Excel warning
+
+        # ✅ NEW: Add helpful note about Excel format
         excel_note = ctk.CTkLabel(
             right_column,
-            text="💡 Note: Excel may show a security warning when opening .xls files - this is normal, click 'Yes' to open",
+            text="💡 Excel format uses Salesforce Analytics API to preserve report structure (groupings, subtotals, formatting)",
             font=ctk.CTkFont(size=10),
             text_color=self.theme_colors["fg_text_dim"],
             wraplength=400,
@@ -1210,17 +1211,17 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             self._log("📄 Export format: CSV (zipped)")
             
         else:  # xlsx
-            # Change to .xls.zip (Native Excel exports are also zipped)
-            if current_filename.endswith('.zip') and not current_filename.endswith('.xls.zip'):
-                new_filename = current_filename.replace('.zip', '.xls.zip')
-            elif not current_filename.endswith('.xls.zip'):
-                # Remove any extension and add .xls.zip
+            # Change to .xlsx.zip (Analytics API exports)
+            if current_filename.endswith('.zip') and not current_filename.endswith('.xlsx.zip'):
+                new_filename = current_filename.replace('.zip', '.xlsx.zip')
+            elif not current_filename.endswith('.xlsx.zip'):
+                # Remove any extension and add .xlsx.zip
                 base_name = current_filename.rsplit('.', 1)[0] if '.' in current_filename else current_filename
-                new_filename = f"{base_name}.xls.zip"
+                new_filename = f"{base_name}.xlsx.zip"
             else:
                 new_filename = current_filename
             
-            self._log("📊 Export format: Native Excel (.xls, preserves formatting)")
+            self._log("📊 Export format: Excel (.xlsx via Analytics API, preserves structure)")
         
         # Update filename entry
         self.filename_entry.delete(0, "end")
@@ -3667,37 +3668,59 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         """
         Enable/disable UI during export.
         
+        ✅ FIXED: Removed logout_button (doesn't exist in this window)
+        
         IMPROVED: Uses atomic state management and better button handling.
         """
         state = "normal" if enabled else "disabled"
         
         try:
-            self.logout_button.configure(state=state)
-            self.browse_button.configure(state=state)
-            # self.all_folders_btn.configure(state=state)
-            self.filename_entry.configure(state=state)
+            # ✅ REMOVED: self.logout_button.configure(state=state)
+            # This button doesn't exist in SalesforceExporterApp
             
-            if enabled:
-                # Re-enable only if user has searched before
-                if self.last_search_keyword:
-                    self.refresh_button.configure(state="normal")
+            # Back button (this exists)
+            if hasattr(self, 'back_button'):
+                self.back_button.configure(state=state)
+            
+            # Browse button
+            if hasattr(self, 'browse_button'):
+                self.browse_button.configure(state=state)
+            
+            # Filename entry
+            if hasattr(self, 'filename_entry'):
+                self.filename_entry.configure(state=state)
+            
+            # Refresh button logic
+            if hasattr(self, 'refresh_button'):
+                if enabled:
+                    # Re-enable only if user has searched before
+                    if self.last_search_keyword:
+                        self.refresh_button.configure(state="normal")
+                    else:
+                        self.refresh_button.configure(state="disabled")
                 else:
+                    # Export starting, disable refresh
                     self.refresh_button.configure(state="disabled")
-            else:
-                # Export starting, disable refresh
-                self.refresh_button.configure(state="disabled")            
             
+            # Search UI
+            if hasattr(self, 'search_button'):
+                self.search_button.configure(state=state)
+            
+            if hasattr(self, 'left_search_entry'):
+                self.left_search_entry.configure(state=state)
             
             if enabled:
                 # ✅ Export finished - restore normal UI
-                self.filename_entry.configure(state="normal")
+                if hasattr(self, 'filename_entry'):
+                    self.filename_entry.configure(state="normal")
                 
                 # ✅ CRITICAL: Use centralized button refresh
                 self._refresh_button_visibility()
                 
             else:
                 # ✅ Export starting - disable everything
-                self.filename_entry.configure(state="disabled")
+                if hasattr(self, 'filename_entry'):
+                    self.filename_entry.configure(state="disabled")
                 
                 # Buttons handled by _refresh_button_visibility()
             
@@ -3706,6 +3729,8 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             
         except Exception as e:
             print(f"⚠️ UI state update error: {e}")
+            import traceback
+            traceback.print_exc()
     
     # ===== QUEUE PROCESSING =====
     def destroy(self):
