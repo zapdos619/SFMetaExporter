@@ -211,30 +211,65 @@ class SalesforceReportExporter:
         api_version: str = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ):
+        """
+        Initialize the Salesforce Report Exporter.
+        
+        Args:
+            session_id: Salesforce session ID (from login)
+            instance_url: Salesforce instance URL (e.g., https://na1.salesforce.com)
+            api_version: Optional API version (e.g., "61.0" or "v61.0"). 
+                        If None, will auto-detect latest version.
+            progress_callback: Optional callback for progress updates
+        """
         self.session_id = session_id
         self.instance_url = instance_url.rstrip('/')
         self.progress_callback = progress_callback
         
+        # ===== API VERSION DETECTION =====
         # Get API version dynamically if not provided
         if api_version:
             self.api_version = api_version if api_version.startswith('v') else f"v{api_version}"
         else:
             self.api_version = get_org_api_version(self.instance_url)
         
+        print(f"📡 Salesforce API Version: {self.api_version}")
+        
+        # ===== VERSION CHECK FOR EXCEL EXPORT =====
+        # Check if API version supports native Excel download (requires v39.0+)
+        self.excel_export_supported = self._check_api_version_for_excel()
+        
+        if self.excel_export_supported:
+            print(f"   ✅ Native Excel export: SUPPORTED")
+        else:
+            print(f"   ⚠️  Native Excel export: NOT SUPPORTED (version < v39.0)")
+            print(f"   ℹ️  Excel exports will fallback to CSV format")
+        
+        # ===== BUILD API ENDPOINTS =====
         # Build endpoints with dynamic version
         self.reports_list_endpoint = f"/services/data/{self.api_version}/analytics/reports"
         self.folders_list_endpoint = f"/services/data/{self.api_version}/folders"
         
-        # Headers for REST API calls (list reports)
+        # ===== SETUP REQUEST HEADERS =====
+        # Headers for REST API calls (list reports, get metadata)
         self.api_headers = {
             "Authorization": f"Bearer {self.session_id}",
             "Accept": "application/json"
         }
         
-        # Cookies for UI export (CSV download)
+        # Headers for native Excel download
+        self.excel_headers = {
+            "Authorization": f"Bearer {self.session_id}",
+            "Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+        
+        # Cookies for UI export (CSV download fallback)
         self.export_cookies = {
             "sid": self.session_id
         }
+        
+        print(f"   🔗 Reports endpoint: {self.reports_list_endpoint}")
+        print(f"   🔗 Instance: {self.instance_url}")
+    
     
     def _query_with_pagination(
         self,
@@ -824,985 +859,126 @@ class SalesforceReportExporter:
         return cleaned_content
 
 
-    def export_report_with_formatting(self, report_id: str, timeout: int = 180) -> bytes:
+    def export_report_excel_native(self, report_id: str, timeout: int = 180) -> bytes:
         """
-        Export report with full Salesforce formatting using Analytics API + SOQL.
+        Download report as formatted Excel using Salesforce's NATIVE exporter.
         
-        ✅ COMPLETE SOLUTION:
-        - Uses Analytics API for report structure, groupings, and aggregates
-        - Uses SOQL to fetch detail rows if API doesn't provide them
-        - Preserves exact Salesforce UI layout
+        This is the EXACT SAME Excel file users get from the Salesforce UI.
+        Uses the official Analytics API Excel download endpoint.
         
-        This preserves:
-        - Groupings and indentation
-        - Detail rows (individual records)
-        - Summary rows (subtotals, grand totals)
-        - Column formatting
-        - Report structure
+        ✅ Supports ALL report types:
+        - Tabular
+        - Summary (with groupings, subtotals, grand totals)
+        - Matrix (cross-tab with row/column groupings)
+        - Joined (multi-block reports)
         
-        Returns proper XLSX with all formatting intact.
+        ✅ Preserves ALL formatting:
+        - Row groupings and indentation
+        - Summary rows (subtotals at each grouping level)
+        - Grand totals
+        - Excel formatting (colors, fonts, borders, alignment)
+        - Merged cells (for matrix reports)
+        - Column headers and data types
+        
+        Args:
+            report_id: Salesforce report ID (15 or 18 character)
+            timeout: Request timeout in seconds (default 180)
+            
+        Returns:
+            bytes: Excel file content (.xlsx format)
+            
+        Raises:
+            Exception: If download fails or API version < 39.0
+            
+        Reference:
+            Salesforce Analytics API - Download Excel:
+            https://developer.salesforce.com/docs/atlas.en-us.api_analytics.meta/api_analytics/sforce_analytics_rest_api_download_excel.htm
         """
         try:
-            from openpyxl import Workbook
-            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-            from io import BytesIO
+            # Build the native Excel download URL
+            download_url = (
+                f"{self.instance_url}/services/data/{self.api_version}"
+                f"/analytics/reports/{report_id}"
+            )
             
-            print(f"📊 Fetching report data for: {report_id}")
+            # Critical: Set Accept header to get Excel format
+            # This tells Salesforce to return .xlsx instead of JSON
+            excel_headers = {
+                "Authorization": f"Bearer {self.session_id}",
+                "Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            }
             
-            # ===== STEP 1: Get report data from Analytics API =====
-            run_url = f"{self.instance_url}/services/data/{self.api_version}/analytics/reports/{report_id}?includeDetails=true"
+            print(f"📥 Downloading native Excel: {report_id}")
+            print(f"   URL: {download_url}")
+            print(f"   Accept: Excel format (.xlsx)")
             
-            print(f"   🔗 Analytics API Request: {run_url}")
-            
+            # Make request with retry logic
             response = retry_request(
-                run_url,
-                headers=self.api_headers,
+                download_url,
+                headers=excel_headers,
                 timeout=timeout,
-                max_retries=3
+                max_retries=3,
+                backoff_factor=2.0
             )
             
-            report_data = response.json()
+            # Validate response
+            if not response.content:
+                raise Exception("Empty response from Salesforce Excel endpoint")
             
-            # ===== STEP 2: Analyze what we got from API =====
-            print(f"   🔍 API Response Analysis:")
-            
-            has_details = report_data.get('hasDetailRows', False)
-            all_data = report_data.get('allData', False)
-            
-            print(f"      hasDetailRows: {has_details}")
-            print(f"      allData: {all_data}")
-            
-            # Count detail rows in response
-            fact_map = report_data.get('factMap', {})
-            total_detail_rows = sum(len(fact.get('rows', [])) for fact in fact_map.values())
-            
-            print(f"      Detail rows in API response: {total_detail_rows}")
-            
-            # ===== STEP 3: Parse report structure =====
-            report_metadata = report_data.get('reportMetadata', {})
-            report_type = report_metadata.get('reportFormat', 'TABULAR')
-            
-            print(f"   📋 Report Type: {report_type}")
-            
-            # Get groupings and columns
-            groupings_down = report_metadata.get('groupingsDown', [])
-            groupings_across = report_metadata.get('groupingsAcross', [])
-            detail_columns = report_metadata.get('detailColumns', [])
-            aggregate_columns = report_metadata.get('aggregates', [])
-            
-            print(f"   📊 Report Structure:")
-            print(f"      Groupings Down: {len(groupings_down)}")
-            print(f"      Groupings Across: {len(groupings_across)}")
-            print(f"      Detail Columns: {len(detail_columns)}")
-            print(f"      Aggregate Columns: {len(aggregate_columns)}")
-            
-            # ===== STEP 4: Decision Point - Do we need SOQL? =====
-            needs_soql = (
-                report_type == 'SUMMARY' and 
-                len(groupings_down) > 0 and 
-                len(detail_columns) > 0 and 
-                total_detail_rows == 0
-            )
-            
-            if needs_soql:
-                print(f"   ⚠️ Summary report with no detail rows detected")
-                print(f"   🔄 Will fetch detail rows via SOQL...")
-            else:
-                print(f"   ✅ API response is complete, no SOQL needed")
-            
-            # ===== STEP 5: Create Excel workbook =====
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Report"
-            
-            # ===== STEP 6: Write data based on report type =====
-            if report_type == 'SUMMARY' and len(groupings_down) > 0:
-                print(f"   📝 Writing SUMMARY report with {len(groupings_down)} groupings")
+            # Check if we got Excel (should start with PK zip signature)
+            if not response.content.startswith(b'PK'):
+                # We got something else (HTML error page, JSON error, etc.)
+                error_text = response.content[:500].decode('utf-8', errors='ignore')
                 
-                # The _write_summary_report method will automatically fetch SOQL if needed
-                self._write_summary_report(ws, report_data, groupings_down, aggregate_columns)
+                if 'login.salesforce.com' in error_text or 'ec=302' in error_text:
+                    raise Exception("Session expired or invalid. Please re-login.")
+                elif 'You do not have access' in error_text:
+                    raise Exception("Access denied to this report.")
+                elif 'Report not found' in error_text or '404' in error_text:
+                    raise Exception("Report not found or deleted.")
+                else:
+                    raise Exception(f"Received non-Excel response: {error_text[:100]}")
             
-            elif report_type == 'MATRIX':
-                print(f"   ⚠️ MATRIX reports: Using simplified layout")
-                print(f"   💡 For full MATRIX support, export as CSV or use Salesforce UI")
-                
-                # Matrix reports are complex - provide a notice
-                self._write_matrix_report_notice(ws, report_data, groupings_down, groupings_across)
+            excel_bytes = response.content
+            size_kb = len(excel_bytes) / 1024
             
-            else:
-                # TABULAR or SUMMARY with no groupings
-                print(f"   📝 Writing TABULAR report")
-                self._write_tabular_report(ws, report_data, detail_columns)
-            
-            # ===== STEP 7: Save to bytes =====
-            excel_buffer = BytesIO()
-            wb.save(excel_buffer)
-            excel_bytes = excel_buffer.getvalue()
-            
-            print(f"✅ Created formatted Excel: {len(excel_bytes)} bytes")
-            print(f"   📄 Total rows written: {ws.max_row}")
-            print(f"   📊 Total columns: {ws.max_column}")
+            print(f"   ✅ Downloaded: {size_kb:.1f} KB")
             
             return excel_bytes
             
-        except ImportError:
-            raise Exception("openpyxl required. Install: pip install openpyxl")
         except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            print(f"❌ Formatted Excel export failed:")
-            print(error_details)
-            raise Exception(f"Formatted Excel export failed: {str(e)}")
+            error_msg = str(e)
+            print(f"   ❌ Native Excel download failed: {error_msg[:100]}")
+            raise Exception(f"Native Excel download failed: {error_msg}")
 
 
-    def _write_matrix_report_notice(self, ws, report_data, groupings_down, groupings_across):
+    def _check_api_version_for_excel(self) -> bool:
         """
-        Write a notice for MATRIX reports with basic information.
+        Check if current API version supports native Excel download.
         
-        MATRIX reports have complex cross-tab layouts that are difficult to 
-        replicate in Excel via API. We provide a simplified view with a notice.
-        """
-        from openpyxl.styles import Font, PatternFill, Alignment
-        
-        current_row = 1
-        
-        # Title
-        title_cell = ws.cell(row=current_row, column=1, value="MATRIX Report Export")
-        title_cell.font = Font(bold=True, size=16, color="C00000")
-        current_row += 2
-        
-        # Notice
-        notice_lines = [
-            "⚠️ MATRIX Report Limitation",
-            "",
-            "This report uses MATRIX format (cross-tab layout) which is not fully",
-            "supported for Excel export via the Analytics API.",
-            "",
-            "To get the full formatted report:",
-            "  1. Open this report in Salesforce",
-            "  2. Click 'Export' → 'Formatted Report'",
-            "  3. Choose Excel format",
-            "",
-            "Alternatively:",
-            "  • Export as CSV format (loses grouping but includes all data)",
-            "  • Use Salesforce Classic export feature",
-            "",
-            "This export shows basic aggregated data only:",
-        ]
-        
-        for line in notice_lines:
-            ws.cell(row=current_row, column=1, value=line)
-            current_row += 1
-        
-        current_row += 1
-        
-        # Try to write basic aggregate data
-        try:
-            fact_map = report_data.get('factMap', {})
-            grand_total = fact_map.get('T!T', {})
-            
-            if grand_total:
-                aggregates = grand_total.get('aggregates', [])
-                
-                # Write aggregate headers and values
-                ws.cell(row=current_row, column=1, value="Aggregated Totals:")
-                ws.cell(row=current_row, column=1).font = Font(bold=True)
-                current_row += 1
-                
-                report_metadata = report_data.get('reportMetadata', {})
-                aggregate_columns = report_metadata.get('aggregates', [])
-                report_extended_metadata = report_data.get('reportExtendedMetadata', {})
-                aggregate_column_info = report_extended_metadata.get('aggregateColumnInfo', {})
-                
-                for idx, agg_col in enumerate(aggregate_columns):
-                    col_info = aggregate_column_info.get(agg_col, {})
-                    label = col_info.get('label', agg_col)
-                    value = aggregates[idx].get('label', '') if idx < len(aggregates) else ''
-                    
-                    ws.cell(row=current_row, column=1, value=label)
-                    ws.cell(row=current_row, column=2, value=value)
-                    current_row += 1
-        except Exception as e:
-            print(f"   ⚠️ Could not write aggregate data: {e}")
-        
-        # Auto-adjust columns
-        for col in ws.columns:
-            max_length = 0
-            column_letter = col[0].column_letter
-            for cell in col:
-                try:
-                    if cell.value:
-                        max_length = max(max_length, len(str(cell.value)))
-                except:
-                    pass
-            adjusted_width = min(max_length + 2, 80)
-            ws.column_dimensions[column_letter].width = adjusted_width
- 
- 
- 
- 
- 
-    def _get_report_describe(self, report_id: str) -> dict:
-        """
-        Get report describe metadata which includes filter details and column mappings.
-        
-        This gives us the information needed to reconstruct the SOQL query.
+        Native Excel download requires API version 39.0 or higher.
         
         Returns:
-            Report describe metadata
+            bool: True if version is sufficient, False otherwise
         """
         try:
-            describe_url = f"{self.instance_url}/services/data/{self.api_version}/analytics/reports/{report_id}/describe"
+            # Extract version number (e.g., "v61.0" -> 61.0)
+            version_str = self.api_version.replace('v', '').replace('V', '')
+            version_float = float(version_str)
             
-            response = requests.get(
-                describe_url,
-                headers=self.api_headers,
-                timeout=30
-            )
-            response.raise_for_status()
+            # Excel download available since v39.0
+            min_version = 39.0
             
-            return response.json()
-        except Exception as e:
-            print(f"      ⚠️ Failed to get report describe: {str(e)}")
-            return {}
-
-
-    def _build_field_mappings(self, report_extended_metadata: dict) -> dict:
-        """
-        Build mapping from report column names to Salesforce field API names.
-        
-        Uses the reportExtendedMetadata.detailColumnInfo which contains the actual field names.
-        
-        Args:
-            report_extended_metadata: Extended metadata from report response
-            
-        Returns:
-            Dictionary mapping report column names to field API names
-        """
-        field_mappings = {}
-        
-        detail_column_info = report_extended_metadata.get('detailColumnInfo', {})
-        grouping_column_info = report_extended_metadata.get('groupingColumnInfo', {})
-        
-        # Map detail columns
-        for col_name, col_info in detail_column_info.items():
-            # The column name itself often IS the field API name
-            # But check if there's a dataType or entityColumnName
-            entity_col = col_info.get('entityColumnName', col_name)
-            field_mappings[col_name] = entity_col
-        
-        # Map grouping columns
-        for col_name, col_info in grouping_column_info.items():
-            entity_col = col_info.get('entityColumnName', col_name)
-            field_mappings[col_name] = entity_col
-        
-        return field_mappings
-
-
-    def _get_sobject_from_report_type(self, report_type_name: str) -> str:
-        """
-        Extract the primary SObject from report type name.
-        
-        Args:
-            report_type_name: Report type like "Opportunity" or "OpportunityReport"
-            
-        Returns:
-            SObject API name like "Opportunity"
-        """
-        # Common report type to SObject mappings
-        mappings = {
-            'Opportunity': 'Opportunity',
-            'OpportunityReport': 'Opportunity',
-            'Account': 'Account',
-            'AccountReport': 'Account',
-            'Contact': 'Contact',
-            'ContactReport': 'Contact',
-            'Lead': 'Lead',
-            'LeadReport': 'Lead',
-            'Case': 'Case',
-            'CaseReport': 'Case',
-            'Task': 'Task',
-            'TaskReport': 'Task',
-            'Event': 'Event',
-            'EventReport': 'Event',
-        }
-        
-        # Try direct lookup
-        if report_type_name in mappings:
-            return mappings[report_type_name]
-        
-        # Try to extract base name
-        for key, value in mappings.items():
-            if key.lower() in report_type_name.lower():
-                return value
-        
-        # Default fallback
-        print(f"      ⚠️ Unknown report type: {report_type_name}, defaulting to Opportunity")
-        return 'Opportunity'
-
-
-    def _parse_report_filters(self, report_metadata: dict) -> str:
-        """
-        Parse report filters and build WHERE clause.
-        
-        Args:
-            report_metadata: Report metadata containing filters
-            
-        Returns:
-            WHERE clause string (without "WHERE" keyword), empty if no filters
-        """
-        try:
-            report_filters = report_metadata.get('reportFilters', [])
-            
-            if not report_filters:
-                return ""
-            
-            filter_clauses = []
-            
-            for filter_item in report_filters:
-                column = filter_item.get('column')
-                operator = filter_item.get('operator')
-                value = filter_item.get('value')
-                
-                if not column or not operator:
-                    continue
-                
-                # Map report operators to SOQL operators
-                operator_map = {
-                    'equals': '=',
-                    'notEqual': '!=',
-                    'lessThan': '<',
-                    'greaterThan': '>',
-                    'lessOrEqual': '<=',
-                    'greaterOrEqual': '>=',
-                    'contains': 'LIKE',
-                    'notContain': 'NOT LIKE',
-                    'startsWith': 'LIKE',
-                }
-                
-                soql_operator = operator_map.get(operator, '=')
-                
-                # Handle different value types
-                if value is None or value == '':
-                    if operator == 'equals':
-                        filter_clauses.append(f"{column} = NULL")
-                    elif operator == 'notEqual':
-                        filter_clauses.append(f"{column} != NULL")
-                    continue
-                
-                # Handle LIKE operators
-                if operator == 'contains':
-                    filter_clauses.append(f"{column} LIKE '%{value}%'")
-                elif operator == 'startsWith':
-                    filter_clauses.append(f"{column} LIKE '{value}%'")
-                elif operator == 'notContain':
-                    filter_clauses.append(f"{column} NOT LIKE '%{value}%'")
-                else:
-                    # Quote strings
-                    if isinstance(value, str):
-                        filter_clauses.append(f"{column} {soql_operator} '{value}'")
-                    else:
-                        filter_clauses.append(f"{column} {soql_operator} {value}")
-            
-            return " AND ".join(filter_clauses)
-        
-        except Exception as e:
-            print(f"      ⚠️ Error parsing filters: {str(e)}")
-            return ""
-
-
-    def _fetch_detail_rows_via_soql(self, report_id: str, report_data: dict) -> dict:
-        """
-        Fetch detail rows for summary report using SOQL query.
-        
-        This reconstructs the report's underlying query to get individual records.
-        
-        Args:
-            report_id: Report ID
-            report_data: Full report data from Analytics API
-            
-        Returns:
-            Dictionary with detail rows grouped by report grouping values
-        """
-        try:
-            print(f"   🔍 Fetching detail rows via SOQL...")
-            
-            report_metadata = report_data.get('reportMetadata', {})
-            report_extended_metadata = report_data.get('reportExtendedMetadata', {})
-            
-            # Get report type and extract SObject
-            report_type_metadata = report_metadata.get('reportType', {})
-            report_type_name = report_type_metadata.get('type', 'Opportunity')
-            
-            sobject = self._get_sobject_from_report_type(report_type_name)
-            
-            print(f"      SObject: {sobject}")
-            
-            # Get field mappings
-            field_mappings = self._build_field_mappings(report_extended_metadata)
-            
-            # Build SELECT clause
-            detail_columns = report_metadata.get('detailColumns', [])
-            groupings = report_metadata.get('groupingsDown', [])
-            
-            select_fields = []
-            
-            # Add grouping fields first
-            for grouping in groupings:
-                field_name = grouping.get('name')
-                if field_name:
-                    mapped_field = field_mappings.get(field_name, field_name)
-                    if mapped_field not in select_fields:
-                        select_fields.append(mapped_field)
-            
-            # Add detail columns
-            for col in detail_columns:
-                mapped_field = field_mappings.get(col, col)
-                if mapped_field not in select_fields:
-                    select_fields.append(mapped_field)
-            
-            if not select_fields:
-                print(f"      ⚠️ No fields to query")
-                return {}
-            
-            print(f"      Fields to query: {select_fields[:5]}... ({len(select_fields)} total)")
-            
-            # Build SOQL query
-            soql = f"SELECT {', '.join(select_fields)} FROM {sobject}"
-            
-            # Add WHERE clause from filters
-            where_clause = self._parse_report_filters(report_metadata)
-            if where_clause:
-                soql += f" WHERE {where_clause}"
-            
-            # Add ORDER BY for grouping
-            if groupings:
-                group_field = field_mappings.get(groupings[0].get('name'), select_fields[0])
-                soql += f" ORDER BY {group_field}"
-            
-            # Add LIMIT to prevent massive queries
-            soql += " LIMIT 2000"
-            
-            print(f"      SOQL Query:")
-            print(f"         {soql[:200]}...")
-            
-            # Execute query
-            query_url = f"{self.instance_url}/services/data/{self.api_version}/query"
-            params = {"q": soql}
-            
-            response = requests.get(
-                query_url,
-                headers=self.api_headers,
-                params=params,
-                timeout=90
-            )
-            response.raise_for_status()
-            
-            query_data = response.json()
-            records = query_data.get('records', [])
-            
-            print(f"      ✅ Fetched {len(records)} records")
-            
-            # Group records by grouping field value
-            if not groupings or not records:
-                return {'__all__': records}
-            
-            grouped = {}
-            grouping_field = field_mappings.get(groupings[0].get('name'))
-            
-            for record in records:
-                # Get grouping value (handle nested fields like Account.Name)
-                group_value = record
-                for field_part in grouping_field.split('.'):
-                    if isinstance(group_value, dict):
-                        group_value = group_value.get(field_part)
-                    else:
-                        break
-                
-                group_key = str(group_value) if group_value is not None else 'NULL'
-                
-                if group_key not in grouped:
-                    grouped[group_key] = []
-                
-                grouped[group_key].append(record)
-            
-            print(f"      ✅ Grouped into {len(grouped)} groups")
-            
-            return grouped
-            
-        except Exception as e:
-            print(f"      ❌ SOQL fetch failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return {}
- 
- 
- 
- 
-    def _write_tabular_report(self, ws, report_data, detail_columns):
-        """Write tabular report (no groupings) - simple table format"""
-        from openpyxl.styles import Font, PatternFill, Alignment
-        
-        print(f"   🔨 Building tabular report...")
-        
-        # Get column labels
-        report_extended_metadata = report_data.get('reportExtendedMetadata', {})
-        detail_column_info = report_extended_metadata.get('detailColumnInfo', {})
-        
-        # Write headers
-        headers = []
-        for col in detail_columns:
-            col_info = detail_column_info.get(col, {})
-            label = col_info.get('label', col)
-            headers.append(label)
-        
-        for col_idx, header in enumerate(headers, start=1):
-            cell = ws.cell(row=1, column=col_idx, value=header)
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-        
-        # Write data rows
-        fact_map = report_data.get('factMap', {})
-        rows_data = fact_map.get('T!T', {}).get('rows', [])
-        
-        for row_idx, row_data in enumerate(rows_data, start=2):
-            data_cells = row_data.get('dataCells', [])
-            for col_idx, cell_data in enumerate(data_cells, start=1):
-                value = cell_data.get('label', '')
-                ws.cell(row=row_idx, column=col_idx, value=value)
-        
-        # Auto-adjust columns
-        self._auto_adjust_columns(ws)
-        ws.freeze_panes = "A2"
-        
-        print(f"   ✅ Tabular report complete: {len(rows_data)} data rows")
-
-
- 
-    def _write_summary_report(self, ws, report_data, groupings_down, aggregate_columns):
-        """
-        Write summary report with groupings, detail rows, and indentation.
-        
-        ✅ DEBUG VERSION: Prints detailed information about what's happening
-        """
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        
-        print(f"\n{'='*70}")
-        print(f"🔨 _WRITE_SUMMARY_REPORT CALLED")
-        print(f"{'='*70}")
-        
-        # Get metadata
-        report_metadata = report_data.get('reportMetadata', {})
-        report_extended_metadata = report_data.get('reportExtendedMetadata', {})
-        grouping_column_info = report_extended_metadata.get('groupingColumnInfo', {})
-        aggregate_column_info = report_extended_metadata.get('aggregateColumnInfo', {})
-        detail_column_info = report_extended_metadata.get('detailColumnInfo', {})
-        
-        # Get detail columns
-        detail_columns = report_metadata.get('detailColumns', [])
-        
-        print(f"📋 Report Metadata:")
-        print(f"   Detail columns: {detail_columns}")
-        print(f"   Groupings: {[g.get('name') for g in groupings_down]}")
-        print(f"   Aggregates: {aggregate_columns}")
-        
-        # Check if API returned detail rows
-        fact_map = report_data.get('factMap', {})
-        
-        print(f"\n🔍 Checking factMap for detail rows...")
-        api_has_details = False
-        for key, fact in list(fact_map.items())[:5]:  # Check first 5
-            rows = fact.get('rows', [])
-            if rows:
-                api_has_details = True
-                print(f"   ✅ {key}: {len(rows)} rows")
+            if version_float >= min_version:
+                return True
             else:
-                print(f"   ❌ {key}: 0 rows")
-        
-        print(f"\n📊 API has detail rows: {api_has_details}")
-        
-        # ✅ CRITICAL: Fetch detail rows via SOQL if API didn't provide them
-        soql_records = {}
-        
-        if not api_has_details and detail_columns:
-            print(f"\n{'='*70}")
-            print(f"⚠️ API DIDN'T RETURN DETAILS - FETCHING VIA SOQL")
-            print(f"{'='*70}")
-            
-            try:
-                # Get report ID
-                report_id = report_metadata.get('id', '')
-                print(f"   Report ID: {report_id}")
+                print(f"⚠️ API version {self.api_version} is below minimum {min_version} for Excel download")
+                return False
                 
-                if not report_id:
-                    print(f"   ❌ ERROR: No report ID found in metadata!")
-                    print(f"   Available metadata keys: {list(report_metadata.keys())}")
-                else:
-                    print(f"   📞 Calling _fetch_detail_rows_via_soql()...")
-                    
-                    soql_records = self._fetch_detail_rows_via_soql(report_id, report_data)
-                    
-                    print(f"\n   📥 SOQL Results:")
-                    print(f"      Keys returned: {list(soql_records.keys())}")
-                    
-                    total_records = sum(len(recs) for recs in soql_records.values())
-                    print(f"      Total records: {total_records}")
-                    
-                    if total_records == 0:
-                        print(f"      ❌ WARNING: SOQL returned 0 records!")
-                    else:
-                        print(f"      ✅ SOQL returned {total_records} records")
-                        
-                        # Show sample
-                        for key, records in list(soql_records.items())[:3]:
-                            print(f"         {key}: {len(records)} records")
-                            if records:
-                                print(f"            Sample: {list(records[0].keys())[:5]}")
-            
-            except Exception as e:
-                print(f"\n   ❌ EXCEPTION during SOQL fetch:")
-                print(f"      {type(e).__name__}: {str(e)}")
-                import traceback
-                traceback.print_exc()
-        else:
-            print(f"\n✅ Using API-provided detail rows (no SOQL needed)")
-        
-        print(f"\n{'='*70}")
-        print(f"📝 Starting Excel Write")
-        print(f"{'='*70}\n")
-        
-        current_row = 1
-        
-        # ===== WRITE HEADERS =====
-        headers = []
-        
-        # Add grouping column headers
-        for grouping in groupings_down:
-            col_name = grouping.get('name')
-            col_info = grouping_column_info.get(col_name, {})
-            label = col_info.get('label', col_name)
-            headers.append(label)
-        
-        # Add detail column headers
-        has_detail_columns = len(detail_columns) > 0
-        if has_detail_columns:
-            for detail_col in detail_columns:
-                col_info = detail_column_info.get(detail_col, {})
-                label = col_info.get('label', detail_col)
-                headers.append(label)
-        
-        # Add aggregate column headers
-        for agg_col in aggregate_columns:
-            col_info = aggregate_column_info.get(agg_col, {})
-            label = col_info.get('label', agg_col)
-            headers.append(label)
-        
-        # Write header row
-        for col_idx, header in enumerate(headers, start=1):
-            cell = ws.cell(row=current_row, column=col_idx, value=header)
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-        
-        current_row += 1
-        
-        print(f"✅ Headers written: {headers}\n")
-        
-        # ===== WRITE GROUPED DATA WITH DETAIL ROWS =====
-        groupings_data = report_data.get('groupingsDown', {}).get('groupings', [])
-        
-        if not groupings_data:
-            print(f"❌ No grouping data found!")
-            return
-        
-        print(f"📊 Processing {len(groupings_data)} top-level groups...\n")
-        
-        # Build field mappings for SOQL records
-        field_mappings = {}
-        if soql_records:
-            print(f"🗺️ Building field mappings...")
-            field_mappings = self._build_field_mappings(report_extended_metadata)
-            print(f"   Mappings: {field_mappings}\n")
-        
-        def write_grouping_level(groupings, level=0):
-            """Recursively write groupings with detail rows and summaries"""
-            nonlocal current_row
-            
-            for group_idx, grouping in enumerate(groupings):
-                label = grouping.get('label', '')
-                key = grouping.get('key', '')
-                
-                print(f"{'  '*level}📁 Group: {label} (key: {key})")
-                
-                # Create indentation
-                indent = "  " * level
-                display_label = f"{indent}{label}"
-                
-                # ===== WRITE GROUP HEADER =====
-                cell = ws.cell(row=current_row, column=1, value=display_label)
-                cell.font = Font(bold=True, color="1F4E78")
-                cell.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
-                
-                current_row += 1
-                
-                # ===== WRITE DETAIL ROWS =====
-                detail_rows = []
-
-                # ✅ FIX: Salesforce factMap uses "key!T" format, not just "key"
-                # Groups have keys like "0", but factMap stores them as "0!T"
-                if key:
-                    fact_map_key = f"{key}!T"
-                else:
-                    fact_map_key = key
-
-                # Try to get from API first
-                fact_data = fact_map.get(fact_map_key, {})
-                api_rows = fact_data.get('rows', [])
-                
-                print(f"{'  '*(level+1)}🔍 DEBUG: fact_map_key='{fact_map_key}', fact_data keys={list(fact_data.keys())}, rows={len(api_rows)}")
-                
-                if api_rows:
-                    # API provided rows
-                    detail_rows = api_rows
-                    print(f"{'  '*(level+1)}✅ Using {len(detail_rows)} API rows")
-                
-                elif soql_records:
-                    # Use SOQL-fetched records
-                    print(f"{'  '*(level+1)}🔍 Looking for SOQL records...")
-                    print(f"{'  '*(level+1)}   Available keys: {list(soql_records.keys())}")
-                    
-                    # Match by group label
-                    soql_group_records = soql_records.get(label, [])
-                    
-                    if not soql_group_records and '__all__' in soql_records:
-                        print(f"{'  '*(level+1)}   Trying to filter from '__all__'")
-                        
-                        # Filter from all records
-                        grouping_field = field_mappings.get(groupings_down[0].get('name'))
-                        print(f"{'  '*(level+1)}   Grouping field: {grouping_field}")
-                        
-                        soql_group_records = [
-                            r for r in soql_records['__all__']
-                            if self._get_nested_value(r, grouping_field) == label
-                        ]
-                        
-                        print(f"{'  '*(level+1)}   Filtered: {len(soql_group_records)} records")
-                    
-                    if soql_group_records:
-                        print(f"{'  '*(level+1)}✅ Using {len(soql_group_records)} SOQL rows")
-                        
-                        # Convert SOQL records to row format
-                        detail_rows = self._convert_soql_to_rows(
-                            soql_group_records,
-                            detail_columns,
-                            field_mappings
-                        )
-                        
-                        print(f"{'  '*(level+1)}   Converted to {len(detail_rows)} rows")
-                    else:
-                        print(f"{'  '*(level+1)}❌ No SOQL records found for this group")
-                
-                # Write detail rows
-                if detail_rows:
-                    print(f"{'  '*(level+1)}📝 Writing {len(detail_rows)} detail rows...")
-                    
-                    for row_idx, row_data in enumerate(detail_rows):
-                        # Handle both API format and converted SOQL format
-                        if isinstance(row_data, dict) and 'dataCells' in row_data:
-                            # API format
-                            data_cells = row_data.get('dataCells', [])
-                            values = [cell.get('label', '') for cell in data_cells]
-                        else:
-                            # Converted SOQL format (list of values)
-                            values = row_data
-                        
-                        # Write row with indentation
-                        col_idx = 1
-                        
-                        # First column: indent
-                        indent_spaces = "    " * (level + 1)
-                        ws.cell(row=current_row, column=col_idx, value=indent_spaces)
-                        col_idx += 1
-                        
-                        # Detail columns
-                        for value in values:
-                            ws.cell(row=current_row, column=col_idx, value=value)
-                            col_idx += 1
-                        
-                        current_row += 1
-                    
-                    print(f"{'  '*(level+1)}✅ Wrote {len(detail_rows)} rows")
-                else:
-                    print(f"{'  '*(level+1)}⚠️ No detail rows to write")
-                
-                # ===== WRITE SUMMARY ROW (SUBTOTAL) =====
-                aggregates = fact_data.get('aggregates', [])
-                
-                if aggregates:
-                    # Subtotal label
-                    subtotal_label = f"{indent}  Total {label}"
-                    cell = ws.cell(row=current_row, column=1, value=subtotal_label)
-                    cell.font = Font(bold=True, color="000000")
-                    cell.fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
-                    
-                    # Calculate column position for aggregates
-                    agg_col_start = 1 + len(groupings_down)
-                    if has_detail_columns:
-                        agg_col_start += len(detail_columns)
-                    
-                    # Write aggregate values
-                    for agg_idx, agg_value in enumerate(aggregates):
-                        value = agg_value.get('label', '')
-                        cell = ws.cell(row=current_row, column=agg_col_start + agg_idx, value=value)
-                        cell.font = Font(bold=True)
-                        cell.fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
-                    
-                    current_row += 1
-                    print(f"{'  '*(level+1)}✅ Wrote subtotal")
-                
-                # ===== RECURSIVELY WRITE SUB-GROUPINGS =====
-                sub_groupings = grouping.get('groupings', [])
-                if sub_groupings:
-                    print(f"{'  '*(level+1)}↓ Processing {len(sub_groupings)} sub-groups...")
-                    write_grouping_level(sub_groupings, level + 1)
-        
-        # Write all groupings
-        write_grouping_level(groupings_data)
-        
-        # ===== WRITE GRAND TOTAL =====
-        print(f"\n📊 Writing Grand Total...")
-        grand_total_fact = fact_map.get('T!T', {})
-        if grand_total_fact:
-            ws.cell(row=current_row, column=1, value="Grand Total")
-            cell = ws.cell(row=current_row, column=1)
-            cell.font = Font(bold=True, size=11)
-            cell.fill = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
-            
-            aggregates = grand_total_fact.get('aggregates', [])
-            
-            # Calculate column position
-            agg_col_start = 1 + len(groupings_down)
-            if has_detail_columns:
-                agg_col_start += len(detail_columns)
-            
-            for agg_idx, agg_value in enumerate(aggregates):
-                value = agg_value.get('label', '')
-                cell = ws.cell(row=current_row, column=agg_col_start + agg_idx, value=value)
-                cell.font = Font(bold=True, size=11)
-                cell.fill = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
-            
-            print(f"✅ Grand Total written at row {current_row}")
-        
-        # Auto-adjust columns
-        self._auto_adjust_columns(ws)
-        
-        # Freeze header row
-        ws.freeze_panes = "A2"
-        
-        print(f"\n{'='*70}")
-        print(f"✅ SUMMARY REPORT COMPLETE: {current_row} rows written")
-        print(f"{'='*70}\n")
-        
-    
-
-    def _get_nested_value(self, record: dict, field_path: str):
-        """
-        Get value from nested field path like 'Account.Name'
-        
-        Args:
-            record: Salesforce record
-            field_path: Field path (e.g., 'Account.Name' or 'Name')
-            
-        Returns:
-            Field value or None
-        """
-        if not field_path:
-            return None
-        
-        value = record
-        for field_part in field_path.split('.'):
-            if isinstance(value, dict):
-                value = value.get(field_part)
-            else:
-                return None
-        
-        return value
-
-
-    def _convert_soql_to_rows(self, soql_records: list, detail_columns: list, field_mappings: dict) -> list:
-        """
-        Convert SOQL records to row format compatible with Excel writer.
-        
-        Args:
-            soql_records: List of Salesforce records from SOQL query
-            detail_columns: List of detail column names from report
-            field_mappings: Mapping of column names to field API names
-            
-        Returns:
-            List of value lists for each row
-        """
-        rows = []
-        
-        for record in soql_records:
-            row_values = []
-            
-            for col_name in detail_columns:
-                field_path = field_mappings.get(col_name, col_name)
-                value = self._get_nested_value(record, field_path)
-                
-                # Format value
-                if value is None:
-                    display_value = ''
-                elif isinstance(value, (int, float)):
-                    display_value = value
-                else:
-                    display_value = str(value)
-                
-                row_values.append(display_value)
-            
-            rows.append(row_values)
-        
-        return rows
-    
-    
-    
-    def _auto_adjust_columns(self, ws):
-        """Auto-adjust column widths based on content"""
-        for column in ws.columns:
-            max_length = 0
-            column_letter = column[0].column_letter
-            
-            for cell in column:
-                try:
-                    if cell.value:
-                        max_length = max(max_length, len(str(cell.value)))
-                except:
-                    pass
-            
-            adjusted_width = min(max_length + 2, 50)
-            ws.column_dimensions[column_letter].width = adjusted_width
-
-
-    def _write_matrix_report(self, ws, report_data, groupings_down, groupings_across):
-        """Write matrix report (crosstab format) - NOT FULLY IMPLEMENTED YET"""
-        from openpyxl.styles import Font
-        
-        print(f"   ⚠️ Matrix reports are not fully supported")
-        
-        ws.cell(row=1, column=1, value="Matrix Report Export")
-        ws.cell(row=1, column=1).font = Font(bold=True, size=14)
-        
-        ws.cell(row=3, column=1, value="⚠️ This report type is not yet supported")
-        ws.cell(row=4, column=1, value="Please use CSV export or open the report in Salesforce")
-        
-        ws.cell(row=6, column=1, value="Report ID:")
-        ws.cell(row=6, column=2, value=report_data.get('reportMetadata', {}).get('id', 'Unknown'))
-
-
-
-
-
+        except Exception as e:
+            print(f"⚠️ Could not parse API version: {self.api_version} - {str(e)}")
+            # Assume it's recent enough
+            return True
 
 
     def export_selected_reports_to_zip_concurrent_excel(
@@ -1815,13 +991,12 @@ class SalesforceReportExporter:
         reports_metadata: Optional[Dict[str, Dict]] = None
     ) -> Dict[str, Any]:
         """
-        Export specific selected reports to formatted Excel using Analytics API.
+        Export specific selected reports to NATIVE Excel format using CONCURRENT downloads.
         
-        ✅ This method preserves ALL Salesforce UI formatting:
-        • Report structure (TABULAR, SUMMARY, MATRIX)
-        • Row groupings and indentation
-        • Summary rows (subtotals, grand totals)
-        • Excel formatting (colors, borders, alignment)
+        ✅ Uses Salesforce's NATIVE Excel exporter (same as UI download)
+        ✅ Supports ALL report types: Tabular, Summary, Matrix, Joined
+        ✅ Preserves EXACT formatting from Salesforce UI
+        ✅ Falls back to CSV if native Excel fails
         
         Args:
             output_zip_path: Path where ZIP file will be saved
@@ -1832,7 +1007,16 @@ class SalesforceReportExporter:
             reports_metadata: Optional dict of {report_id: {name, format}} to skip metadata fetch
             
         Returns:
-            Dictionary with export results
+            Dictionary with export results:
+            {
+                "zip": output_zip_path,
+                "total": total_reports,
+                "successful": ["Report 1", "Report 2", ...],
+                "failed": [{"id": "...", "name": "...", "error": "..."}, ...],
+                "cancelled": bool,
+                "completed": count,
+                "method_used": {"excel": count, "csv_fallback": count}
+            }
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
@@ -1841,9 +1025,8 @@ class SalesforceReportExporter:
         
         try:
             # ===== STEP 1: Get/validate metadata =====
-            print(f"📊 Preparing to export {len(report_ids)} reports as formatted Excel...")
+            print(f"📊 Preparing to export {len(report_ids)} reports as Excel...")
             
-            # ✅ Use provided metadata if available, else fetch
             if reports_metadata:
                 print("⚡ Using cached metadata (skipping API calls)")
                 reports = []
@@ -1857,7 +1040,7 @@ class SalesforceReportExporter:
                             "reportFormat": "TABULAR"
                         })
             else:
-                print("🔍 Fetching report metadata...")
+                print("📋 Fetching report metadata...")
                 if not report_ids:
                     reports = []
                 else:
@@ -1905,6 +1088,12 @@ class SalesforceReportExporter:
             successful: List[str] = []
             used_filenames: Dict[str, int] = {}
             
+            # Track export methods used
+            export_methods = {
+                "excel": 0,        # Native Excel download
+                "csv_fallback": 0  # CSV fallback when Excel fails
+            }
+            
             # Thread-safe counters
             completed_lock = threading.Lock()
             
@@ -1927,16 +1116,17 @@ class SalesforceReportExporter:
                     "folder_name": "Selected Reports (Excel)",
                     "api_version": self.api_version,
                     "cancelled": False,
-                    "completed": 0
+                    "completed": 0,
+                    "method_used": export_methods
                 }
             
             # ===== STEP 2: Define worker function =====
             def export_single_report_excel(report: Dict) -> tuple:
-                """Export a single report as formatted Excel - runs in thread pool"""
+                """Export a single report - tries Excel, falls back to CSV"""
                 nonlocal completed
                 
                 if cancel_event and cancel_event.is_set():
-                    return ("cancelled", report, None)
+                    return ("cancelled", report, None, None)
                 
                 report_id = report.get("id")
                 report_name = report.get("name") or report_id
@@ -1953,106 +1143,167 @@ class SalesforceReportExporter:
                 
                 # Generate filename (thread-safe)
                 base_name = safe_filename(report_name)
-
+                
                 with completed_lock:
                     if base_name in used_filenames:
                         used_filenames[base_name] += 1
-                        filename = f"{base_name}_{used_filenames[base_name]}.xlsx"
+                        file_number = used_filenames[base_name]
                     else:
                         used_filenames[base_name] = 1
-                        filename = f"{base_name}.xlsx"
-
-                excel_path = tmp_dir / filename
+                        file_number = 1
                 
-                # Retry logic with exponential backoff
+                # Try native Excel first, fallback to CSV if it fails
+                export_method = None
+                file_content = None
+                file_extension = None
                 last_error = None
-                for attempt in range(retry_attempts):
-                    if cancel_event and cancel_event.is_set():
-                        return ("cancelled", report, None)
-                    
-                    try:
-                        # Adaptive timeout
-                        timeout = 180 if total > 5000 else 120
+                
+                # ===== ATTEMPT 1: Native Excel Download =====
+                if self.excel_export_supported:
+                    for attempt in range(retry_attempts):
+                        if cancel_event and cancel_event.is_set():
+                            return ("cancelled", report, None, None)
                         
-                        # ✅ FIXED: Only use Analytics API (no fallback)
-                        print(f"📊 Exporting with formatting: {report_name}")
-                        excel_content = self.export_report_with_formatting(report_id, timeout=timeout)
-                        
-                        if not excel_content:
-                            raise Exception("Empty response from Analytics API")
-                        
-                        # Write to file
-                        excel_path.write_bytes(excel_content)
-                        
-                        # ✅ FIXED: Removed export_method variable
-                        print(f"✅ Saved: {filename} ({len(excel_content)} bytes)")
-                        
-                        # Success! Increment counter
-                        with completed_lock:
-                            completed += 1
-                            current_count = completed
-                        
-                        # Notify: Report completed successfully
-                        if self.progress_callback:
-                            try:
-                                self.progress_callback(current_count, total)
-                            except:
-                                pass
-                        
-                        return ("success", report, filename)
-                        
-                    except Exception as e:
-                        last_error = str(e)
-                        
-                        # Check if it's a known unsupported report type
-                        if "not supported" in last_error.lower() or "matrix" in last_error.lower():
-                            print(f"⚠️ Report type not supported: {report_name} ({report_type})")
-                            break  # Don't retry for unsupported types
-                        
-                        if attempt < retry_attempts - 1:
-                            wait_time = (2 ** attempt) + (attempt * 0.5)
-                            print(f"⚠️ Retry {attempt + 1}/{retry_attempts} for {report_name} after {wait_time}s")
-                            time.sleep(wait_time)
-                            continue
-                        else:
+                        try:
+                            timeout = 180 if total > 5000 else 120
+                            
+                            print(f"📥 [{attempt + 1}/{retry_attempts}] Trying Excel: {report_name}")
+                            
+                            excel_content = self.export_report_excel_native(report_id, timeout=timeout)
+                            
+                            if not excel_content:
+                                raise Exception("Empty Excel response")
+                            
+                            # Success!
+                            file_content = excel_content
+                            file_extension = ".xlsx"
+                            export_method = "excel"
+                            print(f"   ✅ Excel downloaded: {len(excel_content)} bytes")
                             break
+                            
+                        except Exception as e:
+                            last_error = str(e)
+                            
+                            if "not found" in last_error.lower() or "deleted" in last_error.lower():
+                                print(f"   ⚠️ Report not found, skipping retries")
+                                break
+                            
+                            if attempt < retry_attempts - 1:
+                                wait_time = (2 ** attempt) + (attempt * 0.5)
+                                print(f"   ⚠️ Excel failed, retry in {wait_time}s: {last_error[:50]}")
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                print(f"   ❌ Excel failed after {retry_attempts} attempts")
+                                break
                 
-                # Failed after all retries
-                error_content = (
-                    f"# Failed to export report after {retry_attempts} attempts\n"
-                    f"# Report Name: {report_name}\n"
-                    f"# Report ID: {report_id}\n"
-                    f"# Report Type: {report_type}\n"
-                    f"# Error: {last_error}\n"
-                    f"#\n"
-                    f"# Note: This report may be a MATRIX or JOINED report type\n"
-                    f"# which is not yet supported by the Analytics API.\n"
-                    f"# Only TABULAR and SUMMARY reports preserve formatting.\n"
-                )
+                # ===== ATTEMPT 2: CSV Fallback =====
+                if file_content is None:
+                    print(f"📄 Falling back to CSV: {report_name}")
+                    
+                    for attempt in range(retry_attempts):
+                        if cancel_event and cancel_event.is_set():
+                            return ("cancelled", report, None, None)
+                        
+                        try:
+                            timeout = 180 if total > 5000 else 120
+                            
+                            csv_content = self.export_report_csv(report_id, timeout=timeout)
+                            
+                            if not csv_content or len(csv_content.strip()) == 0:
+                                raise Exception("Empty CSV response")
+                            
+                            # Success!
+                            file_content = csv_content.encode('utf-8')
+                            file_extension = ".csv"
+                            export_method = "csv_fallback"
+                            print(f"   ✅ CSV downloaded: {len(csv_content)} bytes")
+                            break
+                            
+                        except Exception as e:
+                            last_error = str(e)
+                            
+                            if attempt < retry_attempts - 1:
+                                wait_time = (2 ** attempt) + (attempt * 0.5)
+                                print(f"   ⚠️ CSV failed, retry in {wait_time}s: {last_error[:50]}")
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                print(f"   ❌ CSV failed after {retry_attempts} attempts")
+                                break
                 
-                # Create error file
-                error_path = tmp_dir / f"{base_name}_ERROR.txt"
-                error_path.write_text(error_content, encoding="utf-8")
+                # ===== SAVE FILE OR RECORD FAILURE =====
+                if file_content:
+                    # Build filename with correct extension
+                    if file_number > 1:
+                        filename = f"{base_name}_{file_number}{file_extension}"
+                    else:
+                        filename = f"{base_name}{file_extension}"
+                    
+                    file_path = tmp_dir / filename
+                    
+                    # Write file
+                    if file_extension == ".xlsx":
+                        file_path.write_bytes(file_content)
+                    else:
+                        file_path.write_bytes(file_content)
+                    
+                    # Update counter
+                    with completed_lock:
+                        completed += 1
+                        current_count = completed
+                        export_methods[export_method] += 1
+                    
+                    # Notify: Report completed
+                    if self.progress_callback:
+                        try:
+                            self.progress_callback(current_count, total)
+                        except:
+                            pass
+                    
+                    return ("success", report, filename, export_method)
                 
-                # Increment counter
-                with completed_lock:
-                    completed += 1
-                    current_count = completed
-                
-                # Notify: Report failed
-                if self.progress_callback:
-                    try:
-                        self.progress_callback(current_count, total)
-                    except:
-                        pass
-                
-                return ("failed", report, last_error)
+                else:
+                    # Both Excel and CSV failed - create error file
+                    error_content = (
+                        f"# Failed to export report after {retry_attempts} attempts\n"
+                        f"# Report Name: {report_name}\n"
+                        f"# Report ID: {report_id}\n"
+                        f"# Report Type: {report_type}\n"
+                        f"#\n"
+                        f"# Excel download error: {last_error}\n"
+                        f"#\n"
+                        f"# This report could not be downloaded in any format.\n"
+                        f"# Please try downloading it manually from Salesforce UI.\n"
+                    )
+                    
+                    if file_number > 1:
+                        error_filename = f"{base_name}_{file_number}_ERROR.txt"
+                    else:
+                        error_filename = f"{base_name}_ERROR.txt"
+                    
+                    error_path = tmp_dir / error_filename
+                    error_path.write_text(error_content, encoding="utf-8")
+                    
+                    # Update counter
+                    with completed_lock:
+                        completed += 1
+                        current_count = completed
+                    
+                    # Notify: Report failed
+                    if self.progress_callback:
+                        try:
+                            self.progress_callback(current_count, total)
+                        except:
+                            pass
+                    
+                    return ("failed", report, last_error, None)
             
             # ===== STEP 3: Export reports concurrently =====
             print(f"🚀 Starting concurrent export with {max_workers} workers...")
-            print(f"💡 Using Salesforce Analytics API")
-            print(f"✅ Preserves groupings, summaries, and indentation")
-            print(f"📊 Report structure will match Salesforce UI exactly")
+            print(f"📥 Export method: Native Salesforce Excel (same as UI)")
+            print(f"🔄 Fallback: CSV if Excel fails")
+            print(f"✅ Supports: Tabular, Summary, Matrix, Joined (ALL types)")
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # Submit all tasks
@@ -2074,7 +1325,7 @@ class SalesforceReportExporter:
                         break
                     
                     try:
-                        status, report, data = future.result()
+                        status, report, data, method = future.result()
                         
                         if status == "success":
                             successful.append(report.get("name"))
@@ -2091,7 +1342,10 @@ class SalesforceReportExporter:
                         # Log progress milestones
                         if completed - last_milestone >= milestone_interval:
                             success_rate = (len(successful) / completed * 100) if completed > 0 else 0
-                            print(f"📊 Progress: {completed}/{total} ({completed/total*100:.1f}%) - Success rate: {success_rate:.1f}%")
+                            excel_count = export_methods["excel"]
+                            csv_count = export_methods["csv_fallback"]
+                            print(f"📊 Progress: {completed}/{total} ({completed/total*100:.1f}%) - Success: {success_rate:.1f}%")
+                            print(f"   📥 Excel: {excel_count} | 📄 CSV fallback: {csv_count}")
                             last_milestone = completed
                         
                         # Update progress callback
@@ -2116,7 +1370,7 @@ class SalesforceReportExporter:
             was_cancelled = cancel_event and cancel_event.is_set()
             
             # ===== STEP 4: Create ZIP file =====
-            print(f"📦 Creating ZIP file with {completed} formatted Excel reports...")
+            print(f"📦 Creating ZIP file with {completed} reports...")
             
             with zipfile.ZipFile(output_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 # Write files in sorted order
@@ -2124,57 +1378,65 @@ class SalesforceReportExporter:
                     if file_path.is_file():
                         zf.write(file_path, arcname=file_path.name)
                 
-                # Create summary
+                # Create enhanced summary
                 summary = self._create_summary(
                     total, 
                     successful, 
                     failed, 
-                    "Selected Reports (Formatted Excel)" + (" (CANCELLED)" if was_cancelled else "")
+                    "Selected Reports (Native Excel)" + (" (CANCELLED)" if was_cancelled else "")
                 )
                 
-                # ✅ FIXED: Updated summary text
+                # Add export method statistics
                 summary += "\n\n"
+                summary += "=" * 50 + "\n"
+                summary += "EXPORT METHOD STATISTICS\n"
+                summary += "=" * 50 + "\n"
+                summary += f"Native Excel Downloads: {export_methods['excel']}\n"
+                summary += f"CSV Fallbacks: {export_methods['csv_fallback']}\n"
+                summary += f"Failed: {len(failed)}\n"
+                summary += "\n"
                 summary += "=" * 50 + "\n"
                 summary += "EXCEL EXPORT FORMAT INFORMATION\n"
                 summary += "=" * 50 + "\n"
-                summary += "Export Method: Salesforce Analytics API\n"
+                summary += "Export Method: Salesforce Native Excel Download\n"
+                summary += "API Endpoint: /services/data/vXX.X/analytics/reports/<ID>\n"
+                summary += "Accept Header: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\n"
                 summary += "\n"
-                summary += "✅ This export preserves ALL Salesforce UI formatting:\n"
-                summary += "  • Report structure (TABULAR, SUMMARY, MATRIX)\n"
-                summary += "  • Row groupings (Group By columns)\n"
-                summary += "  • Indentation of grouped rows\n"
-                summary += "  • Summary rows (subtotals, grand totals)\n"
-                summary += "  • Excel formatting (colors, borders, alignment)\n"
-                summary += "  • Column formatting and data types\n"
+                summary += "✅ This export uses Salesforce's NATIVE Excel exporter:\n"
+                summary += "  • Same Excel file as UI 'Export → Formatted Report'\n"
+                summary += "  • Preserves ALL formatting (groupings, subtotals, colors)\n"
+                summary += "  • Supports ALL report types (Tabular, Summary, Matrix, Joined)\n"
+                summary += "  • True .xlsx format (no security warnings)\n"
                 summary += "\n"
-                summary += "📄 File Format: .xlsx (Microsoft Excel 2007+)\n"
-                summary += "📊 Method: Analytics API → Direct XLSX (preserves structure)\n"
+                summary += "📄 CSV Fallbacks:\n"
+                summary += f"  • {export_methods['csv_fallback']} reports exported as CSV\n"
+                summary += "  • CSV is used when native Excel download fails\n"
+                summary += "  • CSV preserves data but not formatting\n"
                 summary += "\n"
-                summary += "⚠️ Limitations:\n"
-                summary += "  • MATRIX and JOINED reports are not yet supported\n"
-                summary += "  • Only TABULAR and SUMMARY reports preserve formatting\n"
-                summary += "  • Unsupported reports will show error files\n"
-                summary += "\n"
-                summary += "💾 Files are true .xlsx format (no security warnings)\n"
+                summary += "Reference:\n"
+                summary += "https://developer.salesforce.com/docs/atlas.en-us.api_analytics.meta/api_analytics/sforce_analytics_rest_api_download_excel.htm\n"
                 summary += "=" * 50 + "\n"
                 
                 zf.writestr("_EXPORT_SUMMARY.txt", summary)
             
             # Final statistics
             success_rate = (len(successful) / total * 100) if total > 0 else 0
-            print(f"✅ Formatted Excel export complete: {len(successful)}/{total} successful ({success_rate:.1f}%)")
+            print(f"✅ Export complete: {len(successful)}/{total} successful ({success_rate:.1f}%)")
+            print(f"   📥 Native Excel: {export_methods['excel']}")
+            print(f"   📄 CSV Fallback: {export_methods['csv_fallback']}")
             if failed:
-                print(f"⚠️ Failed: {len(failed)} reports")
+                print(f"   ❌ Failed: {len(failed)} reports")
             
             return {
                 "zip": output_zip_path,
                 "total": total,
                 "failed": failed,
                 "successful": successful,
-                "folder_name": "Selected Reports (Formatted Excel)",
+                "folder_name": "Selected Reports (Native Excel)",
                 "api_version": self.api_version,
                 "cancelled": was_cancelled,
-                "completed": completed
+                "completed": completed,
+                "method_used": export_methods
             }
         
         finally:
@@ -2184,7 +1446,6 @@ class SalesforceReportExporter:
                 print(f"🧹 Cleaned up temporary files")
             except Exception as e:
                 print(f"⚠️ Error cleaning temp directory: {str(e)[:100]}")
-
 
 
     
@@ -2979,4 +2240,33 @@ class SalesforceReportExporter:
         
         return "\n".join(lines)
     
+
+# TEMPORARY TEST - Remove after verification
+if __name__ == "__main__":
+    # Test version check
+    class MockExporter:
+        def __init__(self, api_version):
+            self.api_version = api_version
+        
+        def _check_api_version_for_excel(self):
+            try:
+                version_str = self.api_version.replace('v', '').replace('V', '')
+                version_float = float(version_str)
+                return version_float >= 39.0
+            except:
+                return True
     
+    # Test cases
+    test_versions = ["v61.0", "v39.0", "v38.0", "v25.0"]
+    
+    for version in test_versions:
+        mock = MockExporter(version)
+        supported = mock._check_api_version_for_excel()
+        status = "✅ SUPPORTED" if supported else "❌ NOT SUPPORTED"
+        print(f"{version}: {status}")
+    
+    # Expected output:
+    # v61.0: ✅ SUPPORTED
+    # v39.0: ✅ SUPPORTED
+    # v38.0: ❌ NOT SUPPORTED
+    # v25.0: ❌ NOT SUPPORTED

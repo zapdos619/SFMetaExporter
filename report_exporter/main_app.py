@@ -1074,9 +1074,10 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         self.excel_radio.pack(side="left")
 
         # ✅ NEW: Add helpful note about Excel format
+        # ✅ Excel format explanation
         excel_note = ctk.CTkLabel(
             right_column,
-            text="💡 Excel format uses Salesforce Analytics API to preserve report structure (groupings, subtotals, formatting)",
+            text="💡 Excel: Uses Salesforce's NATIVE exporter (same file as UI download). Preserves ALL formatting, groupings, and subtotals.",
             font=ctk.CTkFont(size=10),
             text_color=self.theme_colors["fg_text_dim"],
             wraplength=400,
@@ -1197,10 +1198,6 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 new_filename = current_filename.replace('.xlsx.zip', '.zip')
             elif current_filename.endswith('.xls.zip'):
                 new_filename = current_filename.replace('.xls.zip', '.zip')
-            elif current_filename.endswith('.xlsx'):
-                new_filename = current_filename.replace('.xlsx', '.zip')
-            elif current_filename.endswith('.xls'):
-                new_filename = current_filename.replace('.xls', '.zip')
             elif not current_filename.endswith('.zip'):
                 # Remove any extension and add .zip
                 base_name = current_filename.rsplit('.', 1)[0] if '.' in current_filename else current_filename
@@ -1211,7 +1208,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             self._log("📄 Export format: CSV (zipped)")
             
         else:  # xlsx
-            # Change to .xlsx.zip (Analytics API exports)
+            # Change to .xlsx.zip (Native Salesforce Excel)
             if current_filename.endswith('.zip') and not current_filename.endswith('.xlsx.zip'):
                 new_filename = current_filename.replace('.zip', '.xlsx.zip')
             elif not current_filename.endswith('.xlsx.zip'):
@@ -1221,7 +1218,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             else:
                 new_filename = current_filename
             
-            self._log("📊 Export format: Excel (.xlsx via Analytics API, preserves structure)")
+            self._log("📊 Export format: Native Salesforce Excel (.xlsx, preserves ALL formatting)")
         
         # Update filename entry
         self.filename_entry.delete(0, "end")
@@ -2840,6 +2837,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             
             # Get selected format
             selected_format = self.export_format.get()
+            
             format_name = "Excel (.xlsx)" if selected_format == "xlsx" else "CSV"
             
             # Validate and fix filename extension if needed
@@ -2898,16 +2896,22 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             # Update UI
             self._set_export_ui_state(False)
             
+            
+            
+            
+            
             self._log(f"🚀 Starting export of {count} selected reports...")
             self._log(f"📋 Format: {format_name}")
             self._log(f"📦 Destination: {self.output_zip_path}")
-            
-            # ✅ NEW: Log format-specific information
+
+            # ✅ Format-specific information
             if selected_format == "xlsx":
-                self._log("💡 Excel format: Each report will be converted to .xlsx")
-                self._log("⚠️ Note: Excel export may be slower for large reports")
+                self._log("✅ Excel: Using Salesforce's native exporter (same as UI)")
+                self._log("📊 Preserves: Groupings, subtotals, formatting, merged cells")
+                self._log("⚡ Fallback: CSV if native Excel fails for any report")
             else:
                 self._log("💡 CSV format: Fast export, suitable for large datasets")
+                self._log("📄 Note: CSV preserves data but not formatting")
             
             # Get list of report IDs
             report_ids = list(self.selected_items.keys())
@@ -3253,18 +3257,17 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         # ✅ Show dialogs on main thread with slight delay (ensure UI is stable)
         self.after(100, lambda: self._show_completion_dialogs(
             was_cancelled, completed, total, successful, failed, 
-            elapsed_formatted, avg_speed, zip_path
+            elapsed_formatted, avg_speed, zip_path, result  # ✅ ADD result parameter
         ))
     
  
     # main_app.py - ADD this new method
 
     def _show_completion_dialogs(self, was_cancelled, completed, total, successful, 
-                                failed, elapsed_formatted, avg_speed, zip_path):
+                                failed, elapsed_formatted, avg_speed, zip_path, result):
         """
         Show completion dialogs (separated from state management).
         
-        ✅ FIXED: Properly manages _showing_dialog flag to prevent lockup
         """
         print("📢 Showing completion dialogs...")
         
@@ -3289,12 +3292,29 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 # Cancellation dialog
                 success_rate = (len(successful) / total * 100) if total > 0 else 0
                 
+                # ✅ NEW: Show export method breakdown if available
+                excel_count = 0
+                csv_count = 0
+                if isinstance(result, dict) and "method_used" in result:  # ✅ CORRECT
+                    excel_count = result["method_used"].get("excel", 0)
+                    csv_count = result["method_used"].get("csv_fallback", 0)
+                
                 message = f"Export was cancelled.\n\n"
                 message += f"📊 Statistics:\n"
                 message += f"  • Completed: {completed}/{total} reports\n"
                 message += f"  • Successful: {len(successful)}\n"
                 message += f"  • Failed: {len(failed)}\n"
                 message += f"  • Success Rate: {success_rate:.1f}%\n"
+
+                # ✅ NEW: Show method breakdown if Excel format
+                if excel_count > 0 or csv_count > 0:
+                    message += f"\n📈 Export Methods:\n"
+                    message += f"  • Native Excel: {excel_count}\n"
+                    message += f"  • CSV Fallback: {csv_count}\n"
+                
+                message += f"  • Duration: {elapsed_formatted}\n"               
+                
+                
                 message += f"  • Duration: {elapsed_formatted}\n"
                 if avg_speed > 0:
                     message += f"  • Average Speed: {avg_speed:.1f} reports/sec\n"
@@ -3328,12 +3348,28 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 # Success dialog
                 success_rate = (len(successful) / total * 100) if total > 0 else 0
                 
+                # ✅ NEW: Show export method breakdown
+                excel_count = 0
+                csv_count = 0
+                if isinstance(result, dict) and "method_used" in result:  # ✅ CORRECT
+                    excel_count = result["method_used"].get("excel", 0)
+                    csv_count = result["method_used"].get("csv_fallback", 0)             
+                
+                
                 message = f"Export completed successfully!\n\n"
                 message += f"📊 Statistics:\n"
                 message += f"  • Total Reports: {total}\n"
                 message += f"  • Successful: {len(successful)}\n"
                 message += f"  • Failed: {len(failed)}\n"
                 message += f"  • Success Rate: {success_rate:.1f}%\n"
+                
+                # ✅ NEW: Show method breakdown if Excel format
+                if excel_count > 0 or csv_count > 0:
+                    message += f"\n📈 Export Methods:\n"
+                    message += f"  • Native Excel: {excel_count}\n"
+                    message += f"  • CSV Fallback: {csv_count}\n"                
+                
+                
                 message += f"  • Duration: {elapsed_formatted}\n"
                 if avg_speed > 0:
                     message += f"  • Average Speed: {avg_speed:.1f} reports/sec\n"
@@ -3547,18 +3583,8 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         self._log("=" * 50)
         
         # ✅ NEW: Check if it's an Excel dependency error
-        if "openpyxl" in error_msg.lower():
-            helpful_msg = (
-                "Excel export requires the 'openpyxl' library.\n\n"
-                "To install it:\n"
-                "1. Close this application\n"
-                "2. Run: pip install openpyxl\n"
-                "3. Restart the application\n\n"
-                "Alternatively, use CSV format for your export."
-            )
-        else:
-            # Provide helpful error message for other errors
-            helpful_msg = self._get_helpful_error_message(error_msg)
+        # Get helpful error message
+        helpful_msg = self._get_helpful_error_message(error_msg)
         
         # ✅ GUARD: Check if already showing dialog
         with self.state_lock:
