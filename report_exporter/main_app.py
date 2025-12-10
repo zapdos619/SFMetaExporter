@@ -3005,7 +3005,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
         """
         Background worker for export with concurrent downloads.
         
-        ✅ UPDATED: Now supports both CSV and Excel formats with proper threading
+        ✅ FIXED: Ensures ALL selected reports have metadata with proper names
         
         Args:
             report_ids: List of report IDs to export
@@ -3015,21 +3015,79 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             session_id = self.session_info.get("session_id")
             instance_url = self.session_info.get("instance_url")
             
-            # ✅ Build metadata dict from already-loaded data
+            # ✅ BUILD METADATA DICT - IMPROVED VERSION
             reports_metadata = {}
             
+            # Track which reports we couldn't find
+            missing_reports = []
+
             with self.data_lock:
-                # Extract metadata from reports_by_folder (already have this!)
+                # Extract metadata from reports_by_folder
                 for folder_id, reports in self.reports_by_folder.items():
                     for report in reports:
                         report_id = report.get("id")
                         if report_id in report_ids:
+                            # Get name from the report data
+                            report_name = report.get("name")
+                            
+                            # ✅ CRITICAL FIX: Verify name is valid
+                            if not report_name or report_name == report_id or len(report_name.strip()) == 0:
+                                # Name is missing or is the ID - use DeveloperName as fallback
+                                report_name = report.get("developerName")
+                                
+                                # If still bad, create readable name from ID
+                                if not report_name or report_name == report_id:
+                                    report_name = f"Report_{report_id[-8:]}"
+                                    self.update_queue.put(("log", f"⚠️  Report {report_id[-8:]} missing name, using fallback"))
+                            
                             reports_metadata[report_id] = {
                                 "id": report_id,
-                                "name": report.get("name", report_id),
+                                "name": report_name,
                                 "reportFormat": report.get("reportFormat", "TABULAR")
                             }
+                
+                # ✅ CRITICAL CHECK: Find reports that weren't in reports_by_folder
+                for report_id in report_ids:
+                    if report_id not in reports_metadata:
+                        missing_reports.append(report_id)
+                        
+                        # Try to get name from selected_items
+                        if report_id in self.selected_items:
+                            fallback_name = self.selected_items[report_id].get("name", f"Report_{report_id[-8:]}")
+                            
+                            reports_metadata[report_id] = {
+                                "id": report_id,
+                                "name": fallback_name,
+                                "reportFormat": "TABULAR"
+                            }
+                            
+                            self.update_queue.put(("log", f"⚠️  Using name from selection: {fallback_name}"))
+                        else:
+                            # Last resort: use ID with readable suffix
+                            reports_metadata[report_id] = {
+                                "id": report_id,
+                                "name": f"Report_{report_id[-8:]}",
+                                "reportFormat": "TABULAR"
+                            }
+                            
+                            self.update_queue.put(("log", f"❌ Report {report_id[-8:]} not found in search results"))
             
+            # ✅ Log summary
+            if missing_reports:
+                self.update_queue.put(("log", f"⚠️  {len(missing_reports)} reports not found in reports_by_folder"))
+                self.update_queue.put(("log", f"💡 Using fallback names from selected_items"))
+            
+            # ✅ DIAGNOSTIC: Print final metadata
+            print(f"\n{'='*60}")
+            print(f"📦 FINAL METADATA FOR EXPORT:")
+            print(f"{'='*60}")
+            for report_id, metadata in reports_metadata.items():
+                print(f"   ID: {report_id}")
+                print(f"   Name: {metadata['name']}")
+                print(f"   Name == ID?: {metadata['name'] == report_id}")
+            print(f"{'='*60}\n")
+            
+            # ✅ Define progress callback
             def progress_callback(done, total, report_name=None):
                 """Progress callback - called when report starts/completes"""
                 if report_name:
@@ -3049,6 +3107,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                     else:
                         self.update_queue.put(("log", f"  ✅ Completed: {done}/{total} ({percentage}%)"))
             
+            # ✅ Create exporter instance
             exporter = SalesforceReportExporter(
                 session_id,
                 instance_url,
@@ -3064,7 +3123,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 self.update_queue.put(("export_cancelled", None))
                 return
             
-            # ✅ NEW: Call different export method based on format
+            # ✅ Call different export method based on format
             if export_format == "xlsx":
                 # Excel export
                 result = exporter.export_selected_reports_to_zip_concurrent_excel(
@@ -3076,7 +3135,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                     reports_metadata=reports_metadata
                 )
             else:
-                # CSV export (existing method)
+                # CSV export
                 result = exporter.export_selected_reports_to_zip_concurrent(
                     self.output_zip_path,
                     report_ids,
@@ -3088,25 +3147,14 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             
             self.update_queue.put(("export_complete", result))
             
-            # ✅ ADD THIS DEBUG LOGGING:
-            print("=" * 60)
-            print("🔍 DEBUG: Export worker finished")
-            print(f"   Result type: {type(result)}")
-            print(f"   Result keys: {result.keys() if isinstance(result, dict) else 'NOT A DICT'}")
-            print(f"   Total: {result.get('total') if isinstance(result, dict) else 'N/A'}")
-            print(f"   Successful: {len(result.get('successful', [])) if isinstance(result, dict) else 'N/A'}")
-            print(f"   Cancelled: {result.get('cancelled') if isinstance(result, dict) else 'N/A'}")
-            print("=" * 60)
-            
-            # Queue the completion event
-            print("📤 Queueing 'export_complete' event...")
-            print("✅ Event queued successfully")
-            
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
             self.update_queue.put(("log", f"❌ Export error:\n{error_details}"))
             self.update_queue.put(("export_error", str(e)))
+
+    
+    
     
     def _on_export_progress(self, progress_data):
         """Handle export progress update - updates after EACH report"""
