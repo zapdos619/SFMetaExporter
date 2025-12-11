@@ -539,6 +539,13 @@ class SalesforceExporterGUI(ctk.CTk):
                     status_callback=self.update_status
                 )
                 
+                # ✅ DEBUG: Log what we got
+                obj_count = len(self.sf_client.all_org_objects) if self.sf_client else 0
+                print(f"🔍 DEBUG: SalesforceClient created")
+                print(f"🔍 DEBUG: sf_client.all_org_objects = {obj_count} objects")
+                print(f"🔍 DEBUG: sf_client.session_id = {self.sf_client.session_id[:20] if self.sf_client and self.sf_client.session_id else 'None'}...")
+
+                
                 # ✅ SUCCESS - Update UI on main thread
                 self.after(0, self._on_login_success)
                 
@@ -775,11 +782,6 @@ class SalesforceExporterGUI(ctk.CTk):
             
         
         
-        
-        
-        
-  
-        
     def _show_login_status(self, message: str, color: str = "gray"):
         """
         Show status message during login process
@@ -818,7 +820,20 @@ class SalesforceExporterGUI(ctk.CTk):
 
 
     def _on_login_success(self):
-        """Called after successful login - ENHANCED with detailed info"""
+        """Called after successful login - ENHANCED with object validation"""
+        
+        # ✅ FIX 1: Get objects from sf_client, not from self
+        if self.sf_client and hasattr(self.sf_client, 'all_org_objects'):
+            self.all_org_objects = self.sf_client.all_org_objects  # ✅ Copy to GUI
+            object_count = len(self.all_org_objects)
+        else:
+            self.all_org_objects = []
+            object_count = 0
+        
+        # ✅ FIX 2: Initialize exporters IMMEDIATELY (before checking object count)
+        self.picklist_exporter = PicklistExporter(self.sf_client)
+        self.metadata_exporter = MetadataExporter(self.sf_client)
+        self.content_document_exporter = ContentDocumentExporter(self.sf_client)
         
         # Determine connection type
         if self.custom_domain_var.get():
@@ -831,45 +846,113 @@ class SalesforceExporterGUI(ctk.CTk):
         # Check if token was used
         token_status = "with token" if self.token_entry.get().strip() else "without token (IP whitelisted)"
         
-        # Build success message
-        success_msg = (
-            f"Successfully connected to Salesforce!\n\n"
-            f"Connection Details:\n"
-            f"• Type: {connection_type}\n"
-            f"• Domain: {domain_used}\n"
-            f"• Instance: {self.sf_client.base_url}\n"
-            f"• API Version: v{self.sf_client.api_version}\n"
-            f"• Authentication: {token_status}"
-        )
+        # ✅ FIX 3: Show appropriate message based on object count
+        if object_count == 0:
+            # ⚠️ No objects found - show warning but allow login
+            error_msg = (
+                f"⚠️ Connected to Salesforce successfully, but no objects were found.\n\n"
+                f"Connection Details:\n"
+                f"• Type: {connection_type}\n"
+                f"• Domain: {domain_used}\n"
+                f"• Instance: {self.sf_client.base_url}\n"
+                f"• API Version: v{self.sf_client.api_version}\n"
+                f"• Authentication: {token_status}\n\n"
+                f"Possible causes:\n"
+                f"✓ Insufficient permissions (no 'View All Data' or object access)\n"
+                f"✓ API access disabled for your user\n"
+                f"✓ Network/proxy blocking API calls\n\n"
+                f"💡 You can still use Report Exporter and SOQL Runner.\n"
+                f"   Contact your Salesforce administrator to access objects."
+            )
+            
+            messagebox.showwarning("No Objects Found", error_msg)
+            
+            # Log detailed error
+            self.update_status("=" * 60)
+            self.update_status("⚠️ LOGIN SUCCESSFUL BUT NO OBJECTS FOUND")
+            self.update_status(f"📊 Connection Type: {connection_type}")
+            self.update_status(f"🌐 Domain: {domain_used}")
+            self.update_status(f"🔗 Instance: {self.sf_client.base_url}")
+            self.update_status(f"📡 API Version: v{self.sf_client.api_version}")
+            self.update_status(f"🔐 Authentication: {token_status}")
+            self.update_status(f"❌ Objects Found: 0")
+            self.update_status("=" * 60)
+            self.update_status("")
+            self.update_status("💡 Possible solutions:")
+            self.update_status("  • Ask admin to grant 'View All Data' permission")
+            self.update_status("  • Check if API access is enabled for your user")
+            self.update_status("  • Verify profile has object-level read permissions")
+            self.update_status("=" * 60)
+            
+        else:
+            # ✅ SUCCESS: We have objects
+            success_msg = (
+                f"Successfully connected to Salesforce!\n\n"
+                f"Connection Details:\n"
+                f"• Type: {connection_type}\n"
+                f"• Domain: {domain_used}\n"
+                f"• Instance: {self.sf_client.base_url}\n"
+                f"• API Version: v{self.sf_client.api_version}\n"
+                f"• Authentication: {token_status}\n"
+                f"• Objects Found: {object_count}"
+            )
+            
+            messagebox.showinfo("Success", success_msg)
+            
+            # Log detailed connection info
+            self.update_status("=" * 60)
+            self.update_status(f"✅ CONNECTED TO SALESFORCE")
+            self.update_status(f"📊 Connection Type: {connection_type}")
+            self.update_status(f"🌐 Domain: {domain_used}")
+            self.update_status(f"🔗 Instance: {self.sf_client.base_url}")
+            self.update_status(f"📡 API Version: v{self.sf_client.api_version}")
+            self.update_status(f"🔐 Authentication: {token_status}")
+            self.update_status(f"📦 Objects Found: {object_count}")
+            self.update_status("=" * 60)
         
-        messagebox.showinfo("Success", success_msg)
-
-        # Switch to Export Frame
+        # ✅ FIX 4: Switch to Export Frame (even if no objects)
         self.login_frame.grid_forget()
         self.export_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        
+        # ✅ FIX 5: Populate objects (will show empty state if no objects)
         self.populate_available_objects(self.all_org_objects)
         self.populate_selected_objects()
+        
+        # Reset login button
         self.login_button.configure(state="normal", text="Login to Salesforce")
-
-        # Initialize SOQL Runner
+        
+        # ✅ FIX 6: Initialize SOQL Runner (works even without objects)
         self.soql_runner = SOQLRunner(self.sf_client)
         
-        # Initialize Metadata Switch Manager
+        # ✅ FIX 7: Initialize Metadata Switch Manager (works even without objects)
         self.metadata_switch_manager = MetadataSwitchManager(
             self.sf_client.sf,
             status_callback=self.update_status
         )
         
-        # Log detailed connection info
-        self.update_status("=" * 60)
-        self.update_status(f"✅ CONNECTED TO SALESFORCE")
-        self.update_status(f"📊 Connection Type: {connection_type}")
-        self.update_status(f"🌐 Domain: {domain_used}")
-        self.update_status(f"🔗 Instance: {self.sf_client.base_url}")
-        self.update_status(f"📡 API Version: v{self.sf_client.api_version}")
-        self.update_status(f"🔐 Authentication: {token_status}")
-        self.update_status(f"📦 Objects Found: {len(self.all_org_objects)}")
-        self.update_status("=" * 60)
+        # ✅ ADD THIS AT THE VERY END:
+        self._verify_exporters()  # Debug check
+        
+        
+
+
+    def _verify_exporters(self):
+        """Debug method to verify exporters are initialized"""
+        print("\n" + "="*60)
+        print("🔍 EXPORTER VERIFICATION:")
+        print(f"  sf_client: {self.sf_client is not None}")
+        print(f"  picklist_exporter: {self.picklist_exporter is not None}")
+        print(f"  metadata_exporter: {self.metadata_exporter is not None}")
+        print(f"  content_document_exporter: {self.content_document_exporter is not None}")
+        
+        if self.sf_client:
+            print(f"  sf_client.sf: {self.sf_client.sf is not None}")
+            print(f"  sf_client.session_id: {self.sf_client.session_id[:20] if self.sf_client.session_id else 'None'}...")
+            print(f"  sf_client.all_org_objects: {len(self.sf_client.all_org_objects)} objects")
+        
+        print("="*60 + "\n")
+
+
 
 
     def _make_login_error_friendly_OLD(self, error_msg: str) -> tuple[str, str]:
