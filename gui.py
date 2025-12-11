@@ -344,100 +344,440 @@ class SalesforceExporterGUI(ctk.CTk):
 
 
     def login_action(self):
-        """Handle login button click - ENHANCED with Custom Domain support and Suffix Fix"""
-        self.login_button.configure(state="disabled", text="Connecting...")
-
+        """
+        Handle login button click with ENHANCED validation.
+        
+        ✅ STEP 1: Client-side validation (empty fields, format checks)
+        ✅ STEP 2: Attempt Salesforce connection
+        ✅ STEP 3: Smart error inference (next chunk)
+        
+        This prevents unnecessary API calls for obvious input errors.
+        """
+        
+        # ========== STEP 1: CLIENT-SIDE VALIDATION ==========
+        # Get input values
         username = self.username_entry.get().strip()
         password = self.password_entry.get().strip()
         token = self.token_entry.get().strip()
         
-        # ✅ ENHANCED: Determine domain based on custom domain checkbox
-        if self.custom_domain_var.get():
-            # Custom domain mode
-            domain = self.custom_domain_entry.get().strip()
-            
-            if not domain:
-                messagebox.showerror("Input Error", "Please enter your custom Salesforce domain.")
-                self.login_button.configure(state="normal", text="Login to Salesforce")
-                self.custom_domain_entry.focus()
-                return
-            
-            # ✅ Clean up domain input
-            domain = domain.lower()
-            
-            # Remove https:// or http:// if user added it
-            if domain.startswith("https://"):
-                domain = domain[8:]
-            elif domain.startswith("http://"):
-                domain = domain[7:]
-            
-            # Remove trailing slashes
-            domain = domain.rstrip('/')
-            
-            # ✅ Validate domain format
-            valid_suffixes = ["salesforce.com", "force.com", "cloudforce.com"]
-            is_valid = any(suffix in domain for suffix in valid_suffixes)
-            
-            if not is_valid:
-                messagebox.showerror(
-                    "Invalid Domain", 
-                    "Custom domain must be a valid Salesforce domain.\n\n"
-                    "Examples:\n"
-                    "• mycompany.my.salesforce.com\n"
-                    "• mycompany.lightning.force.com"
-                )
-                self.login_button.configure(state="normal", text="Login to Salesforce")
-                self.custom_domain_entry.focus()
-                return
-            
-            # ✅ CRITICAL FIX: Strip .salesforce.com suffix
-            # The simple_salesforce library automatically appends '.salesforce.com' to the domain argument.
-            # If we pass 'my.salesforce.com', it becomes 'my.salesforce.com.salesforce.com'.
-            # We must strip it here before passing it to the client.
-            if domain.endswith(".salesforce.com"):
-                domain = domain[:-15]  # Removes the last 15 characters (.salesforce.com)
-
-        else:
-            # Standard mode (Production or Sandbox)
-            domain = 'test' if self.org_type_var.get() == 'Sandbox' else 'login'
-
-        # ✅ ENHANCED: Token is now optional
-        if not all([username, password]):
-            messagebox.showerror("Input Error", "Username and Password are required.")
+        # ✅ VALIDATION 1: Check Username
+        if not username:
+            messagebox.showerror(
+                "Missing Username",
+                "Please enter your Salesforce username.\n\n"
+                "Example: user@company.com"
+            )
+            self.username_entry.focus()
             self.login_button.configure(state="normal", text="Login to Salesforce")
             return
         
-        # ✅ INFO: Show message if token is empty
-        if not token:
-            self.update_status("ℹ️ Logging in without security token (IP must be whitelisted)")
+        # ✅ VALIDATION 2: Check Password
+        if not password:
+            messagebox.showerror(
+                "Missing Password",
+                "Please enter your Salesforce password."
+            )
+            self.password_entry.focus()
+            self.login_button.configure(state="normal", text="Login to Salesforce")
+            return
+        
+        # ✅ VALIDATION 3: Custom Domain Checks (if enabled)
+        if self.custom_domain_var.get():
+            domain_raw = self.custom_domain_entry.get().strip()
+            
+            # Check 3a: Empty domain
+            if not domain_raw:
+                messagebox.showerror(
+                    "Missing Custom Domain",
+                    "Please enter your custom Salesforce domain.\n\n"
+                    "Example: mycompany.my.salesforce.com"
+                )
+                self.custom_domain_entry.focus()
+                self.login_button.configure(state="normal", text="Login to Salesforce")
+                return
+           
+           
+            # Check 3b: Domain format validation
+            domain_lower = domain_raw.lower()
 
+            # ✅ STEP 1: Remove protocol (case-insensitive)
+            if domain_lower.startswith("https://"):
+                domain_lower = domain_lower[8:]
+            elif domain_lower.startswith("http://"):
+                domain_lower = domain_lower[7:]
+
+            # ✅ STEP 2: Remove trailing slashes and whitespace
+            domain_lower = domain_lower.rstrip('/')
+            domain_lower = domain_lower.strip()
+
+            # ✅ STEP 3: Validate domain format (SECURE - uses endswith())
+            valid_suffixes = [".salesforce.com", ".force.com", ".cloudforce.com"]
+            is_valid_format = any(domain_lower.endswith(suffix) for suffix in valid_suffixes)
+
+            if not is_valid_format:
+                messagebox.showerror(
+                    "Invalid Custom Domain Format",
+                    "Custom domain must END WITH one of:\n\n"
+                    "• .salesforce.com (most common)\n"
+                    "• .force.com\n"
+                    "• .cloudforce.com\n\n"
+                    f"You entered: {domain_raw}\n\n"
+                    "❌ Security: We check the EXACT suffix to prevent spoofing.\n\n"
+                    "✅ Example: mycompany.my.salesforce.com"
+                )
+                self.custom_domain_entry.focus()
+                self.login_button.configure(state="normal", text="Login to Salesforce")
+                return
+
+            # ✅ STEP 4: Additional security check - no suspicious patterns
+            suspicious_patterns = [
+                "..",      # Double dots (path traversal attempt)
+                "//",      # Double slashes (malformed URL)
+                "@",       # Username in URL (phishing attempt)
+                " ",       # Spaces (malformed domain)
+            ]
+
+            if any(pattern in domain_lower for pattern in suspicious_patterns):
+                messagebox.showerror(
+                    "Invalid Domain Format",
+                    "The domain contains invalid characters.\n\n"
+                    f"Domain: {domain_raw}\n\n"
+                    "Please enter a valid Salesforce domain without:\n"
+                    "• Spaces\n"
+                    "• Double dots (..)\n"
+                    "• Double slashes (//)\n"
+                    "• @ symbols\n\n"
+                    "✅ Example: mycompany.my.salesforce.com"
+                )
+                self.custom_domain_entry.focus()
+                self.login_button.configure(state="normal", text="Login to Salesforce")
+                return
+
+            # ✅ STEP 5: Ensure domain has at least one subdomain
+            # Valid: "mycompany.my.salesforce.com" (has 'mycompany.my')
+            # Invalid: "salesforce.com" (no subdomain)
+            domain_parts = domain_lower.split('.')
+
+            if len(domain_parts) < 3:
+                messagebox.showerror(
+                    "Invalid Domain Format",
+                    "Custom domain must include your org subdomain.\n\n"
+                    f"You entered: {domain_raw}\n\n"
+                    "❌ Too short - missing subdomain\n\n"
+                    "✅ Example: mycompany.my.salesforce.com\n"
+                    "   (not just 'my.salesforce.com')"
+                )
+                self.custom_domain_entry.focus()
+                self.login_button.configure(state="normal", text="Login to Salesforce")
+                return
+                        
+            
+            # ✅ STEP 6: Strip known suffixes (simple-salesforce adds them back)
+            if domain_lower.endswith(".salesforce.com"):
+                domain = domain_lower[:-15]  # Remove last 15 chars (.salesforce.com)
+            elif domain_lower.endswith(".force.com"):
+                domain = domain_lower[:-10]  # Remove last 10 chars (.force.com)
+            elif domain_lower.endswith(".cloudforce.com"):
+                domain = domain_lower[:-15]  # Remove last 15 chars (.cloudforce.com)
+            else:
+                domain = domain_lower
+
+            # ✅ STEP 7: Final safety check - domain not empty after stripping
+            if not domain or len(domain) < 2:
+                messagebox.showerror(
+                    "Invalid Domain",
+                    "Domain is too short after processing.\n\n"
+                    f"Original: {domain_raw}\n"
+                    f"Processed: {domain}\n\n"
+                    "Please enter a complete custom domain.\n\n"
+                    "✅ Example: mycompany.my.salesforce.com"
+                )
+                self.custom_domain_entry.focus()
+                self.login_button.configure(state="normal", text="Login to Salesforce")
+                return
+
+            # ✅ Log what we're using (helpful for debugging)
+            self.update_status(f"🌐 Using custom domain: {domain}")
+            
+        else:
+            # Standard domain (Production or Sandbox)
+            domain = 'test' if self.org_type_var.get() == 'Sandbox' else 'login'
+            org_type = "Sandbox" if domain == 'test' else "Production"
+            self.update_status(f"🔐 Connecting to {org_type} org...")
+        
+        # ✅ CRITICAL FIX: Convert empty token to None (not empty string)
+        token = token if token else None
+        
+        # Log token status
+        if token is None:
+            self.update_status("ℹ️ Logging in without security token (IP must be whitelisted)")
+        else:
+            self.update_status("🔑 Using security token for authentication")
+        
+        # ========== STEP 2: DISABLE UI AND ATTEMPT LOGIN ==========
+        self.login_button.configure(state="disabled", text="Connecting...")
+        
+        # Store values for error handler (we'll need these in next chunk)
+        self._login_attempt = {
+            'username': username,
+            'password': password,
+            'token': token,
+            'domain': domain,
+            'is_custom_domain': self.custom_domain_var.get(),
+            'domain_display': self.custom_domain_entry.get().strip() if self.custom_domain_var.get() else domain
+        }
+        
         # Run login in background thread
         def do_login():
             try:
+                # ✅ Attempt Salesforce connection
                 self.sf_client = SalesforceClient(
                     username=username,
                     password=password,
-                    security_token=token,  # Can be empty string now
+                    security_token=token,
                     domain=domain,
                     status_callback=self.update_status
                 )
-
-                # Initialize exporters
-                self.picklist_exporter = PicklistExporter(self.sf_client)
-                self.metadata_exporter = MetadataExporter(self.sf_client)
-                self.content_document_exporter = ContentDocumentExporter(self.sf_client)
-
-                self.all_org_objects = self.sf_client.get_all_objects()
-
-                # Update UI on main thread
+                
+                # ✅ SUCCESS - Update UI on main thread
                 self.after(0, self._on_login_success)
-
+                
             except Exception as e:
-                # Handle error on main thread
-                error_message = str(e);
+                # ❌ FAILED - Handle error on main thread (next chunk will improve this)
+                error_message = str(e)
                 self.after(0, lambda: self._on_login_error(error_message))
-
+        
+        # Start login thread
         ThreadHelper.run_in_thread(do_login)
+        
+        
+        
+    def _infer_login_error(self, error_msg: str) -> str:
+        """
+        Infer what went wrong during login based on error patterns.
+        
+        Uses stored login attempt data (self._login_attempt) for context.
+        
+        ✅ This provides the MOST SPECIFIC error message possible
+        within Salesforce's limitations.
+        
+        Returns:
+            Friendly error message string
+        """
+        
+        error_lower = error_msg.lower()
+        
+        # Get stored login attempt data
+        attempt = getattr(self, '_login_attempt', {})
+        username = attempt.get('username', '')
+        token = attempt.get('token')
+        domain = attempt.get('domain', '')
+        is_custom = attempt.get('is_custom_domain', False)
+        domain_display = attempt.get('domain_display', domain)
+        
+        # ========== PATTERN 1: Network/DNS Issues (Domain Problem) ==========
+        # ✅ Detects: Domain doesn't exist or unreachable
+        is_dns_issue = any(x in error_lower for x in [
+            "nameresolutionerror", 
+            "getaddrinfo", 
+            "name or service not known",
+            "nodename nor servname provided",
+            "no such host",
+            "name resolution",
+            "temporary failure in name resolution"
+        ])
+
+        if is_dns_issue:
+            if is_custom:
+                return (
+                    f"🌐 Custom Domain Not Found\n\n"
+                    f"The domain could not be reached:\n"
+                    f"• {domain_display}\n\n"
+                    f"⚠️ Common mistakes:\n"
+                    f"✓ Check spelling carefully\n"
+                    f"✓ Verify domain is active in Salesforce\n"
+                    f"✓ Ensure you're using YOUR org's subdomain\n"
+                    f"   (not 'login' or 'test')\n\n"
+                    f"❌ WRONG: salesforce.com (too short)\n"
+                    f"❌ WRONG: my.salesforce.com (generic, not yours)\n"
+                    f"✅ RIGHT: mycompany.my.salesforce.com\n\n"
+                    f"💡 Find it in Salesforce:\n"
+                    f"   Setup → My Domain → View Current Domain"
+                )
+            else:
+                return (
+                    "❌ Connection Failed\n\n"
+                    "Could not reach Salesforce servers.\n\n"
+                    "Please check:\n"
+                    "✓ Internet connection is working\n"
+                    "✓ Firewall/VPN is not blocking access\n"
+                    "✓ Salesforce.com is not down (check status.salesforce.com)"
+                )
+        
+        # ========== PATTERN 2: Connection/Timeout Issues ==========
+        # ✅ Detects: Network is slow or unstable
+        is_connection_issue = any(x in error_lower for x in [
+            "max retries exceeded",
+            "connectionerror",
+            "failed to establish",
+            "connection refused",
+            "connection reset",
+            "connection aborted",
+            "network is unreachable"
+        ])
+        
+        is_timeout = "timeout" in error_lower or "timed out" in error_lower
+        
+        if is_connection_issue or is_timeout:
+            if is_custom:
+                return (
+                    f"⚠️ Cannot Connect to Custom Domain\n\n"
+                    f"Failed to establish connection to:\n"
+                    f"• {domain_display}\n\n"
+                    f"Common causes:\n"
+                    f"✓ Domain is spelled incorrectly\n"
+                    f"✓ Network is slow or unstable\n"
+                    f"✓ Firewall/VPN is blocking access\n"
+                    f"✓ Domain is temporarily unavailable\n\n"
+                    f"💡 Try: Check domain spelling or wait a moment"
+                )
+            else:
+                return (
+                    "⚠️ Connection Timeout\n\n"
+                    "Could not connect to Salesforce in time.\n\n"
+                    "Please:\n"
+                    "✓ Check your internet connection\n"
+                    "✓ Try again in a moment\n"
+                    "✓ Check if VPN is causing issues"
+                )
+        
+        # ========== PATTERN 3: INVALID_LOGIN (Username OR Password Wrong) ==========
+        # ⚠️ Salesforce combines these errors - we can't tell which field is wrong
+        if "invalid_login" in error_lower or "invalid username" in error_lower or "authentication failure" in error_lower:
+            if is_custom:
+                return (
+                    f"❌ Invalid Username or Password\n\n"
+                    f"Login failed for custom domain:\n"
+                    f"• {domain_display}\n\n"
+                    f"Please verify:\n"
+                    f"✓ Username: {username}\n"
+                    f"✓ Password (check caps lock)\n"
+                    f"✓ Domain spelling: {domain_display}\n"
+                    f"✓ Account is not locked\n\n"
+                    f"💡 Common mistake: Using credentials from a different org"
+                )
+            else:
+                org_type = "Sandbox" if domain == "test" else "Production"
+                return (
+                    f"❌ Invalid Username or Password\n\n"
+                    f"Login failed for {org_type} org.\n\n"
+                    f"⚠️ Salesforce doesn't specify which field is wrong.\n\n"
+                    f"Please verify:\n"
+                    f"✓ Username: {username}\n"
+                    f"✓ Password (check caps lock)\n"
+                    f"✓ Account is not locked\n"
+                    f"✓ Using correct org type ({org_type})\n\n"
+                    f"💡 Tip: Check if you're using Production credentials in Sandbox"
+                )
+        
+        # ========== PATTERN 4: INVALID_GRANT (Token Problem) ==========
+        # ✅ Can distinguish between "no token" vs "wrong token"
+        if "invalid_grant" in error_lower:
+            if token is None:
+                # No token provided - IP not whitelisted
+                return (
+                    "🔒 Security Token Required\n\n"
+                    "Your IP address is not whitelisted.\n\n"
+                    "Solutions:\n"
+                    "• Add your Security Token (recommended)\n"
+                    "  → Get it from: Setup → My Personal Information → Reset Security Token\n\n"
+                    "• OR ask your Salesforce admin to whitelist your IP\n\n"
+                    "💡 Most users need the security token"
+                )
+            else:
+                # Token was provided but is wrong
+                return (
+                    "❌ Invalid Security Token\n\n"
+                    "The security token is incorrect or expired.\n\n"
+                    "Please:\n"
+                    "✓ Reset your token in Salesforce:\n"
+                    "  Setup → My Personal Information → Reset Security Token\n\n"
+                    "✓ Copy the NEW token from your email\n"
+                    "✓ Paste it in the Security Token field\n"
+                    "✓ Check for extra spaces\n\n"
+                    "⚠️ Token must match the username"
+                )
+        
+        # ========== PATTERN 5: Account Locked/Suspended ==========
+        if "locked" in error_lower or "suspended" in error_lower or "frozen" in error_lower:
+            return (
+                "🔒 Account Locked\n\n"
+                "Your Salesforce account has been locked.\n\n"
+                "Common reasons:\n"
+                "• Too many failed login attempts\n"
+                "• Account suspended by admin\n"
+                "• License expired\n\n"
+                "Please contact your Salesforce administrator."
+            )
+        
+        # ========== PATTERN 6: Session Expired ==========
+        if "session" in error_lower or "expired" in error_lower:
+            return (
+                "⏰ Session Expired\n\n"
+                "Your previous session has expired.\n\n"
+                "Please try logging in again."
+            )
+        
+        # ========== PATTERN 7: API Version / Endpoint Issues ==========
+        if "404" in error_msg or "not found" in error_lower:
+            return (
+                "❌ API Endpoint Not Found\n\n"
+                "Salesforce API endpoint is not responding.\n\n"
+                "This usually means:\n"
+                "• API version is outdated\n"
+                "• Domain is incorrect\n"
+                "• Temporary Salesforce issue\n\n"
+                "Please contact support if this persists."
+            )
+        
+        # ========== PATTERN 8: SSL/Certificate Issues ==========
+        if "ssl" in error_lower or "certificate" in error_lower:
+            return (
+                "🔐 SSL Certificate Error\n\n"
+                "Could not verify Salesforce's security certificate.\n\n"
+                "Common causes:\n"
+                "• System date/time is incorrect\n"
+                "• Antivirus/firewall interference\n"
+                "• Outdated operating system\n\n"
+                "Please check your system settings."
+            )
+        
+        # ========== FALLBACK: Unknown Error ==========
+        # Use old function as fallback for unexpected errors
+        try:
+            return self._make_login_error_friendly_OLD(error_msg)[0]
+        except:
+            pass
+        
+        # Ultimate fallback
+        error_preview = error_msg[:150] + "..." if len(error_msg) > 150 else error_msg
+        
+        return (
+            f"❌ Login Failed\n\n"
+            f"Error: {error_preview}\n\n"
+            f"Please verify:\n"
+            f"✓ Username and password are correct\n"
+            f"✓ Domain is correct (if using custom domain)\n"
+            f"✓ Security token (if required)\n"
+            f"✓ Internet connection is stable\n\n"
+            f"💡 If problem persists, check the Activity Log below for details."
+        )       
+            
+        
+        
+        
+        
+        
   
         
     def _show_login_status(self, message: str, color: str = "gray"):
@@ -532,14 +872,17 @@ class SalesforceExporterGUI(ctk.CTk):
         self.update_status("=" * 60)
 
 
-    def _make_login_error_friendly(self, error_msg: str) -> tuple[str, str]:
+    def _make_login_error_friendly_OLD(self, error_msg: str) -> tuple[str, str]:
         """
-        Convert technical error messages to user-friendly ones.
-        Returns a tuple: (Short Friendly Message for Popup, Detailed Log Message).
+        LEGACY error handler - kept as fallback for unexpected errors.
+        
+        ⚠️ This is now only used as a fallback by _infer_login_error().
+        Do NOT call this directly from _on_login_error.
+        
+        Returns a tuple: (Short Friendly Message, Detailed Log Message).
         """
         error_lower = error_msg.lower()
-        friendly_text = "❌ An unexpected error occurred." # Default short message
-
+        
         # --- LOG MESSAGE PREPARATION ---
         MAX_LOG_LEN = 1000
         if len(error_msg) > MAX_LOG_LEN:
@@ -553,126 +896,137 @@ class SalesforceExporterGUI(ctk.CTk):
             f"Technical Details:\n{tech_log_display}"
         )
         
-        # --- SHORT POPUP MESSAGE DETERMINATION ---
+        # Default message
+        friendly_text = "❌ An unexpected error occurred."
         
-        # ✅ ENHANCED: Better detection for DNS/Domain issues
-        is_dns_issue = any(x in error_lower for x in [
-            "nameresolutionerror", 
-            "getaddrinfo", 
-            "name or service not known",
-            "nodename nor servname provided",
-            "no such host",
-            "name resolution"
-        ])
-        
-        is_connection_issue = any(x in error_lower for x in [
-            "max retries exceeded",
-            "connectionerror",
-            "failed to establish",
-            "connection refused",
-            "connection reset"
-        ])
-        
-        is_timeout = "timeout" in error_lower or "timed out" in error_lower
-
-        # 1. Custom Domain / DNS Errors (HIGHEST PRIORITY)
-        if self.custom_domain_var.get() and is_dns_issue:
-            friendly_text = (
-                "🌐 Custom Domain Not Found\n\n"
-                "The domain you entered could not be reached. "
-                "Please check:\n"
-                "• Spelling is correct\n"
-                "• Domain is active in Salesforce\n"
-                "• No typos in the domain name"
-            )
-        
-        # 2. Custom Domain Connection Issues (but not DNS)
-        elif self.custom_domain_var.get() and is_connection_issue:
-            friendly_text = (
-                "⚠️ Cannot Connect to Custom Domain\n\n"
-                "Failed to establish connection. Please check:\n"
-                "• Domain spelling\n"
-                "• Your internet connection\n"
-                "• Firewall/VPN settings"
-            )
-        
-        # 3. Custom Domain Timeout
-        elif self.custom_domain_var.get() and is_timeout:
-            friendly_text = (
-                "⏱️ Connection Timeout (Custom Domain)\n\n"
-                "The domain took too long to respond. "
-                "This might mean:\n"
-                "• Domain is spelled incorrectly\n"
-                "• Domain is not accessible\n"
-                "• Network is slow"
-            )
-        
-        # 4. IP Whitelisting / Security Token
-        elif "invalid_grant" in error_lower and "security token" not in error_msg:
-            friendly_text = (
-                "⚠️ Login Rejected (Security Token Required)\n\n"
-                "Your IP address is not whitelisted. "
-                "Please add your Security Token."
-            )
-        
-        # 5. Invalid Password/Username
-        elif "invalid username" in error_lower or "invalid login" in error_lower or "authentication failure" in error_lower:
-            friendly_text = "❌ Invalid username or password."
-        
-        # 6. Locked Account
-        elif "locked" in error_lower:
+        # ✅ KEEP: Account locked
+        if "locked" in error_lower:
             friendly_text = "🔒 Account is locked. Please contact your Salesforce administrator."
         
-        # 7. Generic Timeout (non-custom domain)
-        elif is_timeout:
+        # ✅ KEEP: Timeout
+        elif "timeout" in error_lower or "timed out" in error_lower:
             friendly_text = "⏱️ Connection timed out. Try again or check your internet."
         
-        # 8. Generic 404/403
+        # ✅ KEEP: 404/Not found
         elif "404" in error_msg or "not found" in error_lower:
             friendly_text = "❌ The requested resource was not found (404)."
         
+        # ✅ KEEP: Generic connection errors
+        elif any(x in error_lower for x in ["connectionerror", "connection refused", "network is unreachable"]):
+            friendly_text = "❌ Network connection error. Please check your internet."
+        
         return friendly_text, detailed_log_message
 
+
     def _on_login_error(self, error_message):
-        """Called when login fails - Now uses the short message for the popup and detailed for the log."""
+        """
+        Called when login fails.
         
-        # Ensure error_message is a string and not empty
+        Uses the NEW _infer_login_error() function for context-aware error messages.
+        
+        ✅ Shows user-friendly error dialog
+        ✅ Logs technical details to activity log
+        ✅ Smart focus on relevant input field
+        ✅ Resets UI state properly
+        """
+        
+        # ========== STEP 1: ENSURE ERROR MESSAGE IS VALID ==========
         error_message = str(error_message) if error_message else "An unknown error occurred during login."
         
-        # Get the friendly message for the popup and the detailed log message
-        popup_msg, detailed_log_msg = self._make_login_error_friendly(error_message)
+        # ========== STEP 2: GET FRIENDLY ERROR MESSAGE ==========
+        # ✅ Uses NEW inference function (context-aware, specific messages)
+        try:
+            friendly_msg = self._infer_login_error(error_message)
+        except Exception as e:
+            # Fallback if inference fails
+            print(f"⚠️ Error inference failed: {e}")
+            friendly_msg = (
+                f"❌ Login Failed\n\n"
+                f"Error: {error_message[:200]}\n\n"
+                f"Please check your credentials and try again."
+            )
         
-        # 1. Show short error dialog for the user
-        messagebox.showerror("Login Failed", popup_msg)
+        # ========== STEP 3: SHOW ERROR DIALOG TO USER ==========
+        messagebox.showerror("Login Failed", friendly_msg)
         
-        # 2. Log full technical details to the status bar (where the user can scroll)
+        # ========== STEP 4: LOG TECHNICAL DETAILS ==========
+        # Log to activity log for debugging (full error message)
         self.update_status("=" * 60)
-        self.update_status(detailed_log_msg) 
+        self.update_status("❌ LOGIN FAILED")
+        self.update_status("-" * 60)
+        
+        # Log stored login attempt info (if available)
+        attempt = getattr(self, '_login_attempt', None)
+        if attempt:
+            self.update_status(f"Username: {attempt.get('username', 'N/A')}")
+            self.update_status(f"Domain: {attempt.get('domain_display', 'N/A')}")
+            self.update_status(f"Custom Domain: {attempt.get('is_custom_domain', False)}")
+            self.update_status(f"Token Provided: {attempt.get('token') is not None}")
+            self.update_status("-" * 60)
+        
+        # Log full technical error (truncated if too long)
+        MAX_LOG_LEN = 500
+        if len(error_message) > MAX_LOG_LEN:
+            log_error = error_message[:MAX_LOG_LEN] + f"\n... [Truncated {len(error_message)-MAX_LOG_LEN} more chars]"
+        else:
+            log_error = error_message
+        
+        self.update_status(f"Technical Error:\n{log_error}")
         self.update_status("=" * 60)
         
-        # Reset state
+        # ========== STEP 5: RESET UI STATE ==========
         self.sf_client = None
         self.login_button.configure(state="normal", text="Login to Salesforce")
         
-        # Smart Focus: Decide where to put cursor based on the RAW error content
-        err_lower = error_message.lower()
+        # ========== STEP 6: SMART FOCUS (Put cursor in relevant field) ==========
+        # Get stored attempt data
+        attempt = getattr(self, '_login_attempt', {})
+        is_custom = attempt.get('is_custom_domain', False)
+        token = attempt.get('token')
         
-        # If it looks like a domain/DNS issue and Custom Domain is checked -> Focus Domain field
-        is_dns_error = any(x in err_lower for x in ["nameresolutionerror", "getaddrinfo", "max retries", "connectionerror"])
+        error_lower = error_message.lower()
         
-        if self.custom_domain_var.get() and is_dns_error:
-            self.custom_domain_entry.focus()
-            self.custom_domain_entry.select_range(0, 'end')
-            
-        # If token/IP issue -> Focus Token field
-        elif "token" in err_lower or "invalid_grant" in err_lower:
-            self.token_entry.focus()
-            
-        # Otherwise (Password/Username) -> Focus Password field
-        else:
+        # Decision tree for where to focus
+        
+        # 1. DNS/Domain issues with custom domain → Focus domain field
+        is_dns_error = any(x in error_lower for x in [
+            "nameresolutionerror", "getaddrinfo", "name or service not known", 
+            "no such host", "name resolution"
+        ])
+        
+        if is_custom and is_dns_error:
+            try:
+                self.custom_domain_entry.focus()
+                self.custom_domain_entry.select_range(0, 'end')
+            except:
+                pass
+            return
+        
+        # 2. Token issues (INVALID_GRANT) → Focus token field
+        if "invalid_grant" in error_lower:
+            try:
+                self.token_entry.focus()
+                self.token_entry.select_range(0, 'end')
+            except:
+                pass
+            return
+        
+        # 3. Connection/timeout issues → Don't change focus (might be network)
+        is_connection_issue = any(x in error_lower for x in [
+            "timeout", "timed out", "connection", "network"
+        ])
+        
+        if is_connection_issue:
+            # Don't change focus - user should check network, not credentials
+            return
+        
+        # 4. Authentication issues (INVALID_LOGIN) → Focus password field
+        # This is most common, so it's the default
+        try:
             self.password_entry.focus()
-            self.password_entry.delete(0, "end")
-
+            self.password_entry.select_range(0, 'end')
+        except:
+            pass
 
 
     # ==================================
