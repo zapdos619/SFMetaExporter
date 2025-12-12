@@ -3310,7 +3310,6 @@ class SalesforceExporterApp(ctk.CTkToplevel):
     
  
     # main_app.py - ADD this new method
-
     def _show_completion_dialogs(self, was_cancelled, completed, total, successful, 
                                 failed, elapsed_formatted, avg_speed, zip_path, result):
         """
@@ -3341,11 +3340,11 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 success_rate = (len(successful) / total * 100) if total > 0 else 0
                 
                 # ✅ NEW: Show export method breakdown if available
-                excel_count = 0
                 csv_count = 0
-                if isinstance(result, dict) and "method_used" in result:  # ✅ CORRECT
-                    excel_count = result["method_used"].get("excel", 0)
-                    csv_count = result["method_used"].get("csv_fallback", 0)
+                excel_count = 0
+                if isinstance(result, dict) and "method_used" in result:
+                    csv_count = result["method_used"].get("csv", 0)
+                    excel_count = result["method_used"].get("excel_fallback", 0)
                 
                 message = f"Export was cancelled.\n\n"
                 message += f"📊 Statistics:\n"
@@ -3354,18 +3353,16 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 message += f"  • Failed: {len(failed)}\n"
                 message += f"  • Success Rate: {success_rate:.1f}%\n"
 
-                # ✅ NEW: Show method breakdown if Excel format
-                if excel_count > 0 or csv_count > 0:
+                # ✅ NEW: Show method breakdown if available
+                if csv_count > 0 or excel_count > 0:
                     message += f"\n📈 Export Methods:\n"
-                    message += f"  • Native Excel: {excel_count}\n"
-                    message += f"  • CSV Fallback: {csv_count}\n"
-                
-                message += f"  • Duration: {elapsed_formatted}\n"               
-                
+                    message += f"  • CSV Exports: {csv_count}\n"
+                    message += f"  • Excel Fallbacks: {excel_count}\n"
                 
                 message += f"  • Duration: {elapsed_formatted}\n"
                 if avg_speed > 0:
                     message += f"  • Average Speed: {avg_speed:.1f} reports/sec\n"
+                
                 message += f"\n💾 Partial export saved to:\n{zip_path}\n\n"
                 message += f"Do you want to keep this partial export?"
                 
@@ -3397,12 +3394,11 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 success_rate = (len(successful) / total * 100) if total > 0 else 0
                 
                 # ✅ NEW: Show export method breakdown
-                excel_count = 0
                 csv_count = 0
-                if isinstance(result, dict) and "method_used" in result:  # ✅ CORRECT
-                    excel_count = result["method_used"].get("excel", 0)
-                    csv_count = result["method_used"].get("csv_fallback", 0)             
-                
+                excel_count = 0
+                if isinstance(result, dict) and "method_used" in result:
+                    csv_count = result["method_used"].get("csv", 0)
+                    excel_count = result["method_used"].get("excel_fallback", 0)
                 
                 message = f"Export completed successfully!\n\n"
                 message += f"📊 Statistics:\n"
@@ -3411,16 +3407,18 @@ class SalesforceExporterApp(ctk.CTkToplevel):
                 message += f"  • Failed: {len(failed)}\n"
                 message += f"  • Success Rate: {success_rate:.1f}%\n"
                 
-                # ✅ NEW: Show method breakdown if Excel format
-                if excel_count > 0 or csv_count > 0:
+                # ✅ NEW: Show method breakdown if available
+                if csv_count > 0 or excel_count > 0:
                     message += f"\n📈 Export Methods:\n"
-                    message += f"  • Native Excel: {excel_count}\n"
-                    message += f"  • CSV Fallback: {csv_count}\n"                
-                
+                    message += f"  • CSV Exports: {csv_count}\n"
+                    message += f"  • Excel Fallbacks: {excel_count}\n"
+                    if excel_count > 0:
+                        message += f"    (for Joined/Matrix reports)\n"
                 
                 message += f"  • Duration: {elapsed_formatted}\n"
                 if avg_speed > 0:
                     message += f"  • Average Speed: {avg_speed:.1f} reports/sec\n"
+                
                 message += f"\n💾 ZIP saved to:\n{zip_path}"
                 
                 print("📋 Showing success dialog...")
@@ -3443,8 +3441,7 @@ class SalesforceExporterApp(ctk.CTkToplevel):
             with self.state_lock:
                 self._showing_dialog = False
             
-            print("✅ Dialog flag cleared - ready for next export")
-        
+            print("✅ Dialog flag cleared - ready for next export")        
 
     # main_app.py - ADD this new method before _handle_cancelled_export
 

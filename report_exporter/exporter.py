@@ -189,6 +189,9 @@ def clean_csv_footer(csv_content: str) -> str:
     
     return result
 
+
+
+
 # exporter.py - Part 2: SalesforceReportExporter Class
 # This continues from Part 1 (helper functions)
 
@@ -382,6 +385,68 @@ class SalesforceReportExporter:
                     continue
         
         return all_records
+
+
+    def _is_csv_format_error(self, error_message: str, report_format: str) -> bool:
+        """
+        Detect if CSV export failed due to unsupported report format.
+        
+        Joined reports are NEVER supported in CSV.
+        Matrix reports sometimes fail in CSV.
+        
+        Args:
+            error_message: Error message from CSV export attempt
+            report_format: Report format (TABULAR, SUMMARY, MATRIX, JOINED, MultiBlock)
+            
+        Returns:
+            True if error is due to format incompatibility
+        """
+        error_lower = error_message.lower()
+        
+        # Known format-related error patterns from Salesforce
+        format_error_patterns = [
+            "joined report",
+            "join report",
+            "not supported",
+            "unsupported format",
+            "invalid report type",
+            "matrix report",
+            "cannot export",
+            "format not supported",
+            "multiblock"  # ✅ NEW: MultiBlock is Salesforce's internal name for Joined
+        ]
+        
+        # Check if error message contains format-related keywords
+        has_format_error = any(pattern in error_lower for pattern in format_error_patterns)
+        
+        # ✅ IMPROVED: Recognize both "JOINED" and "MultiBlock" formats
+        is_joined = report_format in ("JOINED", "MultiBlock")
+        
+        # Matrix reports often fail in CSV (especially with complex groupings)
+        is_matrix = report_format == "MATRIX"
+        
+        # ✅ NEW: Check for session errors (these should NOT trigger Excel fallback)
+        is_session_error = any(err in error_lower for err in [
+            "session expired",
+            "invalid session",
+            "authentication",
+            "login",
+            "unauthorized"
+        ])
+        
+        # Return True if:
+        # 1. Error message indicates format issue, OR
+        # 2. Report is Joined/MultiBlock (always incompatible), OR
+        # 3. Report is Matrix AND error mentions format
+        # BUT NOT if it's a session error (those need to be handled differently)
+        
+        if is_session_error:
+            return False  # Don't fallback to Excel if session is the problem
+        
+        return has_format_error or is_joined or (is_matrix and has_format_error)
+        
+
+    
 
     def list_all_report_folders(self) -> List[Dict[str, Any]]:
         """
@@ -1304,6 +1369,12 @@ class SalesforceReportExporter:
             print(f"📥 Export method: Native Salesforce Excel (same as UI)")
             print(f"🔄 Fallback: CSV if Excel fails")
             print(f"✅ Supports: Tabular, Summary, Matrix, Joined (ALL types)")
+            # Log to activity window
+            if hasattr(self, 'update_queue'):
+                self.update_queue.put(("log", f"🚀 Starting concurrent export of {len(report_ids)} reports..."))
+                self.update_queue.put(("log", f"📄 CSV format: Fast export for most reports"))
+                self.update_queue.put(("log", f"📊 Excel fallback: Automatic for Joined/Matrix reports"))
+                self.update_queue.put(("log", f"⚡ Method: Concurrent downloads ({max_workers} workers)"))
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # Submit all tasks
@@ -1853,19 +1924,21 @@ class SalesforceReportExporter:
                 pass
     
 
+
     def export_selected_reports_to_zip_concurrent(
         self,
         output_zip_path: str,
         report_ids: List[str],
-        max_workers: int = 10,  # ✅ INCREASED: Default 10 workers for faster exports
+        max_workers: int = 10,
         cancel_event: Optional[Any] = None,
         retry_attempts: int = 3,
         reports_metadata: Optional[Dict[str, Dict]] = None
     ) -> Dict[str, Any]:
         """
-        Export specific selected reports to a ZIP file using CONCURRENT downloads.
+        Export specific selected reports to CSV format using CONCURRENT downloads.
         
-        ✅ OPTIMIZED: Better memory management + adaptive worker count for 10,000+ reports.
+        ✅ Uses CSV export (fast, lightweight)
+        ✅ Automatic Excel fallback for Joined/Matrix reports
         
         Args:
             output_zip_path: Path where ZIP file will be saved
@@ -1876,18 +1949,26 @@ class SalesforceReportExporter:
             reports_metadata: Optional dict of {report_id: {name, format}} to skip metadata fetch
             
         Returns:
-            Dictionary with export results
+            Dictionary with export results:
+            {
+                "zip": output_zip_path,
+                "total": total_reports,
+                "successful": ["Report 1", "Report 2", ...],
+                "failed": [{"id": "...", "name": "...", "error": "..."}, ...],
+                "cancelled": bool,
+                "completed": count,
+                "method_used": {"csv": count, "excel_fallback": count}
+            }
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
         
-        tmp_dir = Path(tempfile.mkdtemp(prefix="sf_reports_"))
+        tmp_dir = Path(tempfile.mkdtemp(prefix="sf_reports_csv_"))
         
         try:
             # ===== STEP 1: Get/validate metadata =====
-            print(f"📊 Preparing to export {len(report_ids)} reports...")
+            print(f"📊 Preparing to export {len(report_ids)} reports as CSV...")
             
-            # ✅ OPTIMIZED: Use provided metadata if available, else fetch
             if reports_metadata:
                 print("⚡ Using cached metadata (skipping API calls)")
                 reports = []
@@ -1895,24 +1976,20 @@ class SalesforceReportExporter:
                     if report_id in reports_metadata:
                         reports.append(reports_metadata[report_id])
                     else:
-                        # Fallback: create basic entry
                         reports.append({
                             "id": report_id,
                             "name": report_id,
                             "reportFormat": "TABULAR"
                         })
             else:
-                print("🔍 Fetching report metadata...")
-                # Fallback: Fetch metadata if not provided
+                print("📋 Fetching report metadata...")
                 if not report_ids:
                     reports = []
                 else:
-                    # ✅ OPTIMIZED: Smaller chunks for stability
-                    chunk_size = 50  # Reduced from 100
+                    chunk_size = 50
                     reports = []
                     
                     for i in range(0, len(report_ids), chunk_size):
-                        # Check for cancellation
                         if cancel_event and cancel_event.is_set():
                             raise Exception("Export cancelled by user")
                         
@@ -1940,7 +2017,6 @@ class SalesforceReportExporter:
                                 })
                         except Exception as e:
                             print(f"⚠️ Error fetching report chunk {i//chunk_size + 1}: {str(e)[:100]}")
-                            # Fallback: create entries with just IDs
                             for rid in chunk_ids:
                                 reports.append({
                                     "id": rid,
@@ -1954,12 +2030,18 @@ class SalesforceReportExporter:
             successful: List[str] = []
             used_filenames: Dict[str, int] = {}
             
+            # Track export methods used
+            export_methods = {
+                "csv": 0,              # CSV succeeded
+                "excel_fallback": 0    # CSV failed → Excel fallback
+            }
+            
             # Thread-safe counters
             completed_lock = threading.Lock()
             
-            # ✅ NEW: Adaptive worker count based on total reports
+            # Adaptive worker count
             if total > 5000:
-                max_workers = min(max_workers, 8)  # Reduce workers for very large exports
+                max_workers = min(max_workers, 8)
                 print(f"⚙️ Large export detected ({total} reports), using {max_workers} workers")
             elif total > 1000:
                 max_workers = min(max_workers, 10)
@@ -1973,18 +2055,18 @@ class SalesforceReportExporter:
                     "total": 0,
                     "failed": [],
                     "successful": [],
-                    "folder_name": "Selected Reports",
+                    "folder_name": "Selected Reports (CSV)",
                     "api_version": self.api_version,
                     "cancelled": False,
-                    "completed": 0
+                    "completed": 0,
+                    "method_used": export_methods
                 }
             
             # ===== STEP 2: Define worker function =====
             def export_single_report(report: Dict) -> tuple:
-                """Export a single report - runs in thread pool"""
+                """Export a single report - tries CSV, falls back to Excel if format unsupported"""
                 nonlocal completed
                 
-                # Check for cancellation
                 if cancel_event and cancel_event.is_set():
                     return ("cancelled", report, None)
                 
@@ -1992,12 +2074,11 @@ class SalesforceReportExporter:
                 report_name = report.get("name") or report_id
                 report_type = report.get("reportFormat", "TABULAR")
                 
-                # ✅ NOTIFY: Starting download of this report
+                # Notify: Starting download
                 if self.progress_callback:
                     try:
                         with completed_lock:
                             current_count = completed
-                        # Signal: download starting (with report name)
                         self.progress_callback(current_count, total, report_name)
                     except:
                         pass
@@ -2008,86 +2089,189 @@ class SalesforceReportExporter:
                 with completed_lock:
                     if base_name in used_filenames:
                         used_filenames[base_name] += 1
-                        filename = f"{base_name}_{used_filenames[base_name]}.csv"
+                        file_number = used_filenames[base_name]
                     else:
                         used_filenames[base_name] = 1
-                        filename = f"{base_name}.csv"
+                        file_number = 1
                 
-                csv_path = tmp_dir / filename
-                
-                # Retry logic with exponential backoff
+                # ===== NEW: CSV Export with Excel Fallback =====
+                export_method = None
+                file_content = None
+                file_extension = None
                 last_error = None
-                for attempt in range(retry_attempts):
-                    # Check cancellation before each attempt
-                    if cancel_event and cancel_event.is_set():
-                        return ("cancelled", report, None)
-                    
-                    try:
-                        # ✅ IMPROVED: Adaptive timeout based on total export size
-                        timeout = 180 if total > 5000 else 120
-                        
-                        csv_content = self.export_report_csv(report_id, timeout=timeout)
-                        
-                        if not csv_content or len(csv_content.strip()) == 0:
-                            raise Exception("Empty response received")
-                        
-                        first_line = csv_content.split('\n')[0] if csv_content else ""
-                        if 'Error' in first_line and len(csv_content) < 500:
-                            raise Exception(f"Salesforce error: {first_line[:100]}")
-                        
-                        csv_path.write_text(csv_content, encoding="utf-8")
-                        
-                        # Success! Increment counter FIRST
-                        with completed_lock:
-                            completed += 1
-                            current_count = completed
-                        
-                        # ✅ NOTIFY: Report completed successfully
-                        if self.progress_callback:
-                            try:
-                                self.progress_callback(current_count, total)
-                            except:
-                                pass
-                        
-                        return ("success", report, filename)
-                        
-                    except Exception as e:
-                        last_error = str(e)
-                        if attempt < retry_attempts - 1:
-                            # ✅ IMPROVED: Exponential backoff with jitter
-                            wait_time = (2 ** attempt) + (attempt * 0.5)  # 1s, 2.5s, 5s
-                            time.sleep(wait_time)
-                            continue
-                        else:
-                            # All retries failed
-                            break
                 
-                # Failed after all retries
-                error_content = (
-                    f"# Failed to export report after {retry_attempts} attempts\n"
-                    f"# Report Name: {report_name}\n"
-                    f"# Report ID: {report_id}\n"
-                    f"# Report Type: {report_type}\n"
-                    f"# Error: {last_error}\n"
-                )
-                csv_path.write_text(error_content, encoding="utf-8")
-
-                # Increment counter FIRST
-                with completed_lock:
-                    completed += 1
-                    current_count = completed
-
-                # ✅ NOTIFY: Report failed (but counted as completed)
-                if self.progress_callback:
-                    try:
-                        self.progress_callback(current_count, total)
-                    except:
-                        pass
-
-                return ("failed", report, last_error)
+                # ✅ IMPROVED: Pre-check if report type is known to be incompatible with CSV
+                should_skip_csv = report_type in ("JOINED", "MultiBlock")
+                
+                if should_skip_csv:
+                    print(f"⚠️ {report_type} report detected: {report_name}")
+                    print(f"   Skipping CSV, using Excel directly")
+                    # Don't even try CSV for Joined/MultiBlock reports
+                    last_error = f"{report_type} reports are not supported in CSV format"
+                else:
+                    # ATTEMPT 1: Try CSV first (user's choice)
+                    for attempt in range(retry_attempts):
+                        if cancel_event and cancel_event.is_set():
+                            return ("cancelled", report, None)
+                        
+                        try:
+                            timeout = 180 if total > 5000 else 120
+                            
+                            print(f"📄 [{attempt + 1}/{retry_attempts}] Trying CSV: {report_name}")
+                            
+                            csv_content = self.export_report_csv(report_id, timeout=timeout)
+                            
+                            if not csv_content or len(csv_content.strip()) == 0:
+                                raise Exception("Empty CSV response")
+                            
+                            # Check if it's an error page (HTML instead of CSV)
+                            if csv_content.strip().startswith('<!DOCTYPE') or csv_content.strip().startswith('<html'):
+                                raise Exception("Received HTML error page instead of CSV")
+                            
+                            # Success!
+                            file_content = csv_content.encode('utf-8')
+                            file_extension = ".csv"
+                            export_method = "csv"
+                            print(f"   ✅ CSV downloaded: {len(csv_content)} bytes")
+                            break
+                            
+                        except Exception as e:
+                            last_error = str(e)
+                            
+                            # Check if this is a format incompatibility error
+                            is_format_error = self._is_csv_format_error(last_error, report_type)
+                            
+                            if is_format_error:
+                                print(f"   ⚠️ CSV format not supported for {report_type} report")
+                                break  # Don't retry CSV, go straight to Excel fallback
+                            
+                            # Not a format error - might be temporary issue
+                            if attempt < retry_attempts - 1:
+                                wait_time = (2 ** attempt) + (attempt * 0.5)
+                                print(f"   ⚠️ CSV failed, retry in {wait_time}s: {last_error[:50]}")
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                print(f"   ❌ CSV failed after {retry_attempts} attempts")
+                                break
+                
+                # ATTEMPT 2: Excel Fallback (if CSV failed due to format)
+                if file_content is None:
+                    # ✅ IMPROVED: Better decision on whether to try Excel
+                    should_try_excel = (
+                        last_error and 
+                        (self._is_csv_format_error(last_error, report_type) or should_skip_csv)
+                    )
+                    
+                    if should_try_excel:
+                        print(f"📊 CSV→Excel fallback: {report_name} ({report_type})")
+                        
+                        for attempt in range(retry_attempts):
+                            if cancel_event and cancel_event.is_set():
+                                return ("cancelled", report, None)
+                            
+                            try:
+                                timeout = 180 if total > 5000 else 120
+                                
+                                print(f"📊 [{attempt + 1}/{retry_attempts}] Trying Excel fallback: {report_name}")
+                                
+                                excel_content = self.export_report_excel_native(report_id, timeout=timeout)
+                                
+                                if not excel_content:
+                                    raise Exception("Empty Excel response")
+                                
+                                # Success!
+                                file_content = excel_content
+                                file_extension = ".xlsx"
+                                export_method = "excel_fallback"
+                                print(f"   ✅ Excel fallback successful: {len(excel_content)} bytes")
+                                break
+                                
+                            except Exception as e:
+                                excel_error = str(e)
+                                
+                                if attempt < retry_attempts - 1:
+                                    wait_time = (2 ** attempt) + (attempt * 0.5)
+                                    print(f"   ⚠️ Excel fallback failed, retry in {wait_time}s: {excel_error[:50]}")
+                                    time.sleep(wait_time)
+                                    continue
+                                else:
+                                    print(f"   ❌ Excel fallback failed after {retry_attempts} attempts")
+                                    last_error = f"CSV failed ({last_error[:100]}), Excel fallback also failed ({excel_error[:100]})"
+                                    break
+                
+                # ===== SAVE FILE OR RECORD FAILURE =====
+                if file_content:
+                    # Build filename with correct extension
+                    if file_number > 1:
+                        filename = f"{base_name}_{file_number}{file_extension}"
+                    else:
+                        filename = f"{base_name}{file_extension}"
+                    
+                    file_path = tmp_dir / filename
+                    
+                    # Write file
+                    if file_extension == ".xlsx":
+                        file_path.write_bytes(file_content)
+                    else:
+                        file_path.write_bytes(file_content)
+                    
+                    # Update counter
+                    with completed_lock:
+                        completed += 1
+                        current_count = completed
+                        export_methods[export_method] += 1
+                    
+                    # Notify: Report completed
+                    if self.progress_callback:
+                        try:
+                            self.progress_callback(current_count, total)
+                        except:
+                            pass
+                    
+                    return ("success", report, filename, export_method)
+                
+                else:
+                    # Both CSV and Excel (if attempted) failed - create error file
+                    error_content = (
+                        f"# Failed to export report after {retry_attempts} attempts\n"
+                        f"# Report Name: {report_name}\n"
+                        f"# Report ID: {report_id}\n"
+                        f"# Report Type: {report_type}\n"
+                        f"#\n"
+                        f"# Error: {last_error}\n"
+                        f"#\n"
+                        f"# This report could not be downloaded in any format.\n"
+                        f"# Please try downloading it manually from Salesforce UI.\n"
+                    )
+                    
+                    if file_number > 1:
+                        error_filename = f"{base_name}_{file_number}_ERROR.txt"
+                    else:
+                        error_filename = f"{base_name}_ERROR.txt"
+                    
+                    error_path = tmp_dir / error_filename
+                    error_path.write_text(error_content, encoding="utf-8")
+                    
+                    # Update counter
+                    with completed_lock:
+                        completed += 1
+                        current_count = completed
+                    
+                    # Notify: Report failed
+                    if self.progress_callback:
+                        try:
+                            self.progress_callback(current_count, total)
+                        except:
+                            pass
+                    
+                    return ("failed", report, last_error, None)
             
             # ===== STEP 3: Export reports concurrently =====
             print(f"🚀 Starting concurrent export with {max_workers} workers...")
+            print(f"📄 Export method: CSV (fast, lightweight)")
+            print(f"📊 Fallback: Excel for Joined/Matrix reports")
+            print(f"✅ Supports: All report types with automatic fallback")
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # Submit all tasks
@@ -2096,22 +2280,20 @@ class SalesforceReportExporter:
                     for report in reports
                 }
                 
-                # ✅ NEW: Track progress milestones
+                # Track progress milestones
                 last_milestone = 0
-                milestone_interval = max(100, total // 20)  # Log every 5%
+                milestone_interval = max(100, total // 20)
                 
                 # Process completed tasks
                 for future in as_completed(future_to_report):
-                    # Check for cancellation
                     if cancel_event and cancel_event.is_set():
                         print("⚠️ Cancellation detected, stopping remaining downloads...")
-                        # Cancel remaining futures
                         for f in future_to_report:
                             f.cancel()
                         break
                     
                     try:
-                        status, report, data = future.result()
+                        status, report, data, method = future.result()
                         
                         if status == "success":
                             successful.append(report.get("name"))
@@ -2123,13 +2305,15 @@ class SalesforceReportExporter:
                                 "error": data
                             })
                         elif status == "cancelled":
-                            # Don't count as failed, just stopped
                             pass
                         
-                        # ✅ NEW: Log progress milestones
+                        # Log progress milestones
                         if completed - last_milestone >= milestone_interval:
                             success_rate = (len(successful) / completed * 100) if completed > 0 else 0
-                            print(f"📊 Progress: {completed}/{total} ({completed/total*100:.1f}%) - Success rate: {success_rate:.1f}%")
+                            csv_count = export_methods["csv"]
+                            excel_count = export_methods["excel_fallback"]
+                            print(f"📊 Progress: {completed}/{total} ({completed/total*100:.1f}%) - Success: {success_rate:.1f}%")
+                            print(f"   📄 CSV: {csv_count} | 📊 Excel fallback: {excel_count}")
                             last_milestone = completed
                         
                         # Update progress callback
@@ -2140,7 +2324,6 @@ class SalesforceReportExporter:
                                 pass
                                 
                     except Exception as e:
-                        # Future itself failed
                         report = future_to_report.get(future)
                         if report:
                             failed.append({
@@ -2158,43 +2341,84 @@ class SalesforceReportExporter:
             print(f"📦 Creating ZIP file with {completed} reports...")
             
             with zipfile.ZipFile(output_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                # ✅ OPTIMIZED: Write files in sorted order for consistent ZIP structure
+                # Write files in sorted order
                 for file_path in sorted(tmp_dir.iterdir()):
                     if file_path.is_file():
                         zf.write(file_path, arcname=file_path.name)
                 
+                # Create enhanced summary
                 summary = self._create_summary(
                     total, 
                     successful, 
                     failed, 
-                    "Selected Reports" + (" (CANCELLED)" if was_cancelled else "")
+                    "Selected Reports (CSV)" + (" (CANCELLED)" if was_cancelled else "")
                 )
+                
+                # Add export method statistics
+                summary += "\n\n"
+                summary += "=" * 50 + "\n"
+                summary += "EXPORT METHOD STATISTICS\n"
+                summary += "=" * 50 + "\n"
+                summary += f"CSV Exports: {export_methods['csv']}\n"
+                summary += f"Excel Fallbacks: {export_methods['excel_fallback']}\n"
+                summary += f"Failed: {len(failed)}\n"
+                summary += "\n"
+                summary += "=" * 50 + "\n"
+                summary += "CSV EXPORT FORMAT INFORMATION\n"
+                summary += "=" * 50 + "\n"
+                summary += "Primary Method: CSV Export (fast, lightweight)\n"
+                summary += "Fallback Method: Excel Export (for unsupported formats)\n"
+                summary += "\n"
+                summary += "✅ CSV exports preserve data in simple format:\n"
+                summary += "  • Fast export for Tabular/Summary reports\n"
+                summary += "  • Easy to process in spreadsheets/databases\n"
+                summary += "  • Lightweight file size\n"
+                summary += "\n"
+                summary += "📊 Excel Fallbacks (for unsupported formats):\n"
+                summary += f"  • {export_methods['excel_fallback']} reports exported as Excel\n"
+                summary += "  • Used when CSV format doesn't support:\n"
+                summary += "    - Joined reports (multi-block)\n"
+                summary += "    - Complex Matrix reports\n"
+                summary += "  • Preserves ALL formatting (groupings, subtotals)\n"
+                summary += "\n"
+                summary += "Report Type Compatibility:\n"
+                summary += "  • Tabular:  ✅ CSV (default)\n"
+                summary += "  • Summary:  ✅ CSV (default)\n"
+                summary += "  • Matrix:   ✅ CSV (⚠️ Excel fallback if complex)\n"
+                summary += "  • Joined:   ❌ CSV not supported → Excel fallback\n"
+                summary += "=" * 50 + "\n"
+                
                 zf.writestr("_EXPORT_SUMMARY.txt", summary)
             
-            # ✅ NEW: Final statistics
+            # Final statistics
             success_rate = (len(successful) / total * 100) if total > 0 else 0
             print(f"✅ Export complete: {len(successful)}/{total} successful ({success_rate:.1f}%)")
+            print(f"   📄 CSV Exports: {export_methods['csv']}")
+            print(f"   📊 Excel Fallbacks: {export_methods['excel_fallback']}")
             if failed:
-                print(f"⚠️ Failed: {len(failed)} reports")
+                print(f"   ❌ Failed: {len(failed)} reports")
             
             return {
                 "zip": output_zip_path,
                 "total": total,
                 "failed": failed,
                 "successful": successful,
-                "folder_name": "Selected Reports",
+                "folder_name": "Selected Reports (CSV)",
                 "api_version": self.api_version,
                 "cancelled": was_cancelled,
-                "completed": completed
+                "completed": completed,
+                "method_used": export_methods
             }
         
         finally:
-            # ✅ IMPROVED: Better cleanup with error handling
+            # Cleanup temporary files
             try:
                 shutil.rmtree(tmp_dir)
                 print(f"🧹 Cleaned up temporary files")
             except Exception as e:
                 print(f"⚠️ Error cleaning temp directory: {str(e)[:100]}")
+
+
 
 
     def _get_folder_name(self, folder_id: str) -> str:
