@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional, Set, List
 from tkinter import messagebox, filedialog, END
 from threading_helper import ThreadHelper
-
+from datetime import datetime
 import customtkinter as ctk
 
 from config import WINDOW_TITLE, WINDOW_GEOMETRY, APPEARANCE_MODE, COLOR_THEME
@@ -117,6 +117,9 @@ class SalesforceExporterGUI(ctk.CTk):
         self.content_document_exporter: Optional[ContentDocumentExporter] = None
         self.all_org_objects: List[str] = []
         self.selected_objects: Set[str] = set()
+        
+        # âœ… NEW: Export mode selection variable
+        self.export_mode_var = ctk.StringVar(value="single_tab")
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -1165,15 +1168,18 @@ class SalesforceExporterGUI(ctk.CTk):
         self.status_textbox.insert("end", "Status: Ready to select objects and export.")
         self.status_textbox.configure(state="disabled")
 
-        # Export buttons frame (NOW WITH 5 BUTTONS)
+        # âœ… NEW: Export Mode Selection Frame (THE RED BOX AREA)
+        self._setup_export_mode_frame(export_frame)
+
+        # Export buttons frame (6 BUTTONS)
         export_buttons_frame = ctk.CTkFrame(export_frame, fg_color="transparent")
-        export_buttons_frame.grid(row=3, column=0, pady=(10, 20), sticky="ew", padx=20)  
+        export_buttons_frame.grid(row=4, column=0, pady=(10, 20), sticky="ew", padx=20)  # âœ… Changed from row=3 to row=4
         export_buttons_frame.grid_columnconfigure(0, weight=1)
         export_buttons_frame.grid_columnconfigure(1, weight=1)
         export_buttons_frame.grid_columnconfigure(2, weight=1)
         export_buttons_frame.grid_columnconfigure(3, weight=1)
 
-        # Configure 5 columns with equal weight
+        # Configure 6 columns with equal weight
         for i in range(6):
             export_buttons_frame.grid_columnconfigure(i, weight=1)
         
@@ -1217,7 +1223,6 @@ class SalesforceExporterGUI(ctk.CTk):
         )
         self.run_soql_button.grid(row=0, column=3, sticky="ew", padx=(5, 5))
         
-        # NEW 5TH BUTTON - SALESFORCE SWITCH
         self.salesforce_switch_button = ctk.CTkButton(
             export_buttons_frame,
             text="Salesforce Switch",
@@ -1228,19 +1233,18 @@ class SalesforceExporterGUI(ctk.CTk):
         )
         self.salesforce_switch_button.grid(row=0, column=4, sticky="ew", padx=(5, 0))
         
-        # ✅ NEW 6TH BUTTON - REPORT EXPORTER
         self.report_exporter_button = ctk.CTkButton(
             export_buttons_frame,
             text="📊 Report Export",
             command=self.report_exporter_action,
             height=50,
-            fg_color="#16A085",  # Teal/green color
+            fg_color="#16A085",
             hover_color="#138D75",
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.report_exporter_button.grid(row=0, column=5, sticky="ew", padx=(5, 0))
         
-        # ✅ NEW: Register all buttons with state manager (add at END of _setup_export_frame)
+        # Register all buttons with state manager
         self.button_manager.register_buttons({
             'picklist': self.export_picklist_button,
             'metadata': self.export_metadata_button,
@@ -1351,6 +1355,83 @@ class SalesforceExporterGUI(ctk.CTk):
             background="#242424"
         )
         self.selected_listbox.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
+
+
+    def _setup_export_mode_frame(self, parent):
+        """Setup export mode selection frame (Radio buttons for export options)"""
+        
+        # Main frame for export mode selection (THE RED BOX AREA)
+        # ✅ Use theme-aware colors: (light_mode_color, dark_mode_color)
+        export_mode_frame = ctk.CTkFrame(parent, fg_color=("#E0E0E0", "#2B2B2B"))
+        export_mode_frame.grid(row=3, column=0, padx=20, pady=(10, 10), sticky="ew")
+        export_mode_frame.grid_columnconfigure(0, weight=0)  # Label
+        export_mode_frame.grid_columnconfigure(1, weight=1)  # Radio buttons container
+        
+        # Label on the left
+        mode_label = ctk.CTkLabel(
+            export_mode_frame,
+            text="📑 Excel Export Mode:",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w",
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Dark gray (light), Light gray (dark)
+        )
+        mode_label.grid(row=0, column=0, padx=(15, 20), pady=15, sticky="w")
+        
+        # Radio buttons container (horizontal layout)
+        radio_container = ctk.CTkFrame(export_mode_frame, fg_color="transparent")
+        radio_container.grid(row=0, column=1, padx=(0, 15), pady=15, sticky="w")
+        
+        # Radio Button 1: Single Tab (Default)
+        self.radio_single_tab = ctk.CTkRadioButton(
+            radio_container,
+            text="📄 Single Tab (All objects in one sheet)",
+            variable=self.export_mode_var,
+            value="single_tab",
+            font=ctk.CTkFont(size=12),
+            command=self._on_export_mode_changed,
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Theme-aware text color
+        )
+        self.radio_single_tab.grid(row=0, column=0, padx=(0, 25), sticky="w")
+        
+        # Radio Button 2: Multiple Tabs
+        self.radio_multi_tab = ctk.CTkRadioButton(
+            radio_container,
+            text="📑 Multiple Tabs (One sheet per object)",
+            variable=self.export_mode_var,
+            value="multi_tab",
+            font=ctk.CTkFont(size=12),
+            command=self._on_export_mode_changed,
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Theme-aware text color
+        )
+        self.radio_multi_tab.grid(row=0, column=1, padx=(0, 25), sticky="w")
+        
+        # Radio Button 3: Individual Files
+        self.radio_individual_files = ctk.CTkRadioButton(
+            radio_container,
+            text="📦 Individual Files (Separate .xlsx per object, auto-zipped)",
+            variable=self.export_mode_var,
+            value="individual_files",
+            font=ctk.CTkFont(size=12),
+            command=self._on_export_mode_changed,
+            text_color=("#2c3e50", "#ecf0f1")  # ✅ Theme-aware text color
+        )
+        self.radio_individual_files.grid(row=0, column=2, padx=(0, 0), sticky="w")
+
+
+
+    def _on_export_mode_changed(self):
+        """Called when user changes export mode radio button"""
+        selected_mode = self.export_mode_var.get()
+        
+        mode_descriptions = {
+            "single_tab": "All selected objects will be exported to a single Excel sheet",
+            "multi_tab": "Each object will have its own tab in one Excel file",
+            "individual_files": "Each object will be saved as a separate Excel file (auto-zipped if multiple objects)"
+        }
+        
+        description = mode_descriptions.get(selected_mode, "")
+        self.update_status(f"📑 Export mode changed: {description}")
+
 
     # ==================================
     # Object List Management Methods
@@ -1930,38 +2011,63 @@ class SalesforceExporterGUI(ctk.CTk):
         if not self.button_manager.start_operation("Picklist Export"):
             return
 
-        default_filename = DEFAULT_PICKLIST_FILENAME.format(
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
-        )
+        # ✅ Get selected export mode
+        export_mode = self.export_mode_var.get()
+        
+        # ✅ Determine file extension and filter based on mode
+        if export_mode == "individual_files":
+            # Individual files mode - will create .zip (or single .xlsx)
+            file_types = [("ZIP files", "*.zip"), ("Excel files", "*.xlsx")]
+            default_ext = ".zip"
+        else:
+            # Single tab or multi-tab - always .xlsx
+            file_types = [("Excel files", "*.xlsx")]
+            default_ext = ".xlsx"
+        
+        # ✅ Generate default filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if export_mode == "individual_files":
+            default_filename = f"Salesforce_Picklist_Export_{timestamp}.zip"
+        else:
+            default_filename = f"Picklist_Export_{timestamp}.xlsx"
+        
+        # ✅ Ask user for save location
         output_file_path = filedialog.asksaveasfilename(
-            defaultextension=".xlsx",
+            defaultextension=default_ext,
             initialfile=default_filename,
-            filetypes=[("Excel files", "*.xlsx")]
+            filetypes=file_types
         )
 
         if not output_file_path:
-            # ✅ NEW: User cancelled, end operation
+            # User cancelled, end operation
             self.button_manager.end_operation()
             return
 
-        # ✅ REMOVE OLD CODE: Delete these lines if they exist:
-        # self.export_picklist_button.configure(state="disabled", text="Exporting... DO NOT CLOSE")
-        # self.export_metadata_button.configure(state="disabled")
-        # self.download_files_button.configure(state="disabled")
-        # self.run_soql_button.configure(state="disabled")
-        # self.salesforce_switch_button.configure(state="disabled")
-
+        # ✅ Log export details
+        mode_descriptions = {
+            "single_tab": "Single Tab (all objects in one sheet)",
+            "multi_tab": "Multiple Tabs (one sheet per object)",
+            "individual_files": "Individual Files (separate .xlsx per object, auto-zipped)"
+        }
+        
+        mode_desc = mode_descriptions.get(export_mode, export_mode)
+        
         self.update_status(
-            f"Starting picklist export for {len(selected_objects_list)} objects to {output_file_path}..."
+            f"Starting picklist export for {len(selected_objects_list)} objects..."
         )
+        self.update_status(f"📑 Export Mode: {mode_desc}")
+        self.update_status(f"💾 Output: {output_file_path}")
+        
         start_time = time.time()
 
-        # Run export in background thread
+        # ✅ Run export in background thread
         def do_export():
             try:
-                output_path, stats = self.picklist_exporter.export_picklists(
+                # ✅ NEW: Use export_picklists_excel with mode parameter
+                output_path, stats = self.picklist_exporter.export_picklists_excel(
                     selected_objects_list,
-                    output_file_path
+                    output_file_path,
+                    export_mode=export_mode
                 )
 
                 end_time = time.time()
@@ -1979,25 +2085,47 @@ class SalesforceExporterGUI(ctk.CTk):
 
         ThreadHelper.run_in_thread(do_export)
 
+
+
     def _on_picklist_export_success(self, output_path, stats, runtime_formatted):
         """Called after successful picklist export"""
+        
+        # ✅ Get export mode for messaging
+        export_mode = stats.get('export_mode', 'unknown')
+        
+        mode_descriptions = {
+            "single_tab": "Single Tab Mode",
+            "multi_tab": "Multiple Tabs Mode",
+            "individual_files": "Individual Files Mode"
+        }
+        
+        mode_desc = mode_descriptions.get(export_mode, export_mode)
+        
         self.update_status(f"Export Complete! Total Runtime: {runtime_formatted}")
-        messagebox.showinfo(
-            "Export Done",
-            f"Picklist data successfully exported to:\n{output_path}"
-        )
+        
+        # ✅ Determine file type for message
+        file_ext = os.path.splitext(output_path)[1].lower()
+        
+        if file_ext == ".zip":
+            message = (
+                f"Picklist data successfully exported!\n\n"
+                f"Mode: {mode_desc}\n"
+                f"ZIP Archive: {output_path}\n\n"
+                f"📦 The ZIP contains individual Excel files for each object."
+            )
+        else:
+            message = (
+                f"Picklist data successfully exported!\n\n"
+                f"Mode: {mode_desc}\n"
+                f"Excel File: {output_path}"
+            )
+        
+        messagebox.showinfo("Export Done", message)
 
         print_picklist_statistics(stats, runtime_formatted, output_path)
 
-        # ✅ NEW: Re-enable all buttons
+        # ✅ Re-enable all buttons
         self.button_manager.end_operation()
-
-        # ✅ REMOVE OLD CODE: Delete these lines if they exist:
-        # self.export_picklist_button.configure(state="normal", text="Export Picklist Data")
-        # self.export_metadata_button.configure(state="normal")
-        # self.download_files_button.configure(state="normal")
-        # self.run_soql_button.configure(state="normal")
-        # self.salesforce_switch_button.configure(state="normal")
 
     def _on_picklist_export_error(self, error_message):
         """Called when picklist export fails"""
@@ -2012,6 +2140,7 @@ class SalesforceExporterGUI(ctk.CTk):
         # self.export_metadata_button.configure(state="normal")
         # self.download_files_button.configure(state="normal")
         # self.salesforce_switch_button.configure(state="normal")
+
 
     def export_metadata_action(self):
         """Handle export metadata button click"""
@@ -2032,33 +2161,63 @@ class SalesforceExporterGUI(ctk.CTk):
         if not self.button_manager.start_operation("Metadata Export"):
             return
 
-        default_filename = DEFAULT_METADATA_FILENAME.format(
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
-        )
+        # ✅ Get selected export mode
+        export_mode = self.export_mode_var.get()
+        
+        # ✅ Determine file extension and filter based on mode
+        if export_mode == "individual_files":
+            # Individual files mode - will create .zip (or single .xlsx)
+            file_types = [("ZIP files", "*.zip"), ("Excel files", "*.xlsx")]
+            default_ext = ".zip"
+        else:
+            # Single tab or multi-tab - always .xlsx
+            file_types = [("Excel files", "*.xlsx")]
+            default_ext = ".xlsx"
+        
+        # ✅ Generate default filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if export_mode == "individual_files":
+            default_filename = f"Salesforce_Metadata_Export_{timestamp}.zip"
+        else:
+            default_filename = f"Object_Metadata_{timestamp}.xlsx"
+        
+        # ✅ Ask user for save location
         output_file_path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
+            defaultextension=default_ext,
             initialfile=default_filename,
-            filetypes=[("CSV files", "*.csv")]
+            filetypes=file_types
         )
 
         if not output_file_path:
-            # ✅ NEW: User cancelled, end operation
+            # User cancelled, end operation
             self.button_manager.end_operation()
             return
 
-        # ✅ REMOVE OLD CODE: Delete button disable lines
-
+        # ✅ Log export details
+        mode_descriptions = {
+            "single_tab": "Single Tab (all objects in one sheet)",
+            "multi_tab": "Multiple Tabs (one sheet per object)",
+            "individual_files": "Individual Files (separate .xlsx per object, auto-zipped)"
+        }
+        
+        mode_desc = mode_descriptions.get(export_mode, export_mode)
+        
         self.update_status(
-            f"Starting metadata export for {len(selected_objects_list)} objects to {output_file_path}..."
+            f"Starting metadata export for {len(selected_objects_list)} objects..."
         )
+        self.update_status(f"📑 Export Mode: {mode_desc}")
+        self.update_status(f"💾 Output: {output_file_path}")
+        
         start_time = time.time()
 
-        # Run export in background thread
+        # ✅ Run export in background thread
         def do_export():
             try:
-                output_path, stats = self.metadata_exporter.export_metadata(
+                # ✅ NEW: Use export_metadata_excel with mode parameter
+                output_path, stats = self.metadata_exporter.export_metadata_excel(
                     selected_objects_list,
-                    output_file_path
+                    output_file_path,
+                    export_mode=export_mode
                 )
 
                 end_time = time.time()
@@ -2076,18 +2235,49 @@ class SalesforceExporterGUI(ctk.CTk):
 
         ThreadHelper.run_in_thread(do_export)
 
+
     def _on_metadata_export_success(self, output_path, stats, runtime_formatted):
         """Called after successful metadata export"""
+        
+        # ✅ Get export mode for messaging
+        export_mode = stats.get('export_mode', 'unknown')
+        
+        mode_descriptions = {
+            "single_tab": "Single Tab Mode",
+            "multi_tab": "Multiple Tabs Mode",
+            "individual_files": "Individual Files Mode"
+        }
+        
+        mode_desc = mode_descriptions.get(export_mode, export_mode)
+        
         self.update_status(f"Export Complete! Total Runtime: {runtime_formatted}")
-        messagebox.showinfo(
-            "Export Done",
-            f"Metadata successfully exported to:\n{output_path}"
-        )
+        
+        # ✅ Determine file type for message
+        file_ext = os.path.splitext(output_path)[1].lower()
+        
+        if file_ext == ".zip":
+            message = (
+                f"Metadata successfully exported!\n\n"
+                f"Mode: {mode_desc}\n"
+                f"ZIP Archive: {output_path}\n\n"
+                f"📦 The ZIP contains individual Excel files for each object."
+            )
+        else:
+            message = (
+                f"Metadata successfully exported!\n\n"
+                f"Mode: {mode_desc}\n"
+                f"Excel File: {output_path}"
+            )
+        
+        messagebox.showinfo("Export Done", message)
 
         print_metadata_statistics(stats, runtime_formatted, output_path)
 
-        # ✅ NEW: Re-enable all buttons
+        # ✅ Re-enable all buttons
         self.button_manager.end_operation()
+
+
+
 
     def _on_metadata_export_error(self, error_message):
         """Called when metadata export fails"""
