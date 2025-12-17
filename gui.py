@@ -1329,19 +1329,34 @@ class SalesforceExporterGUI(ctk.CTk):
             height=35
         ).pack(pady=5, padx=5, fill="x")
 
+
     def _setup_selected_objects_panel(self, parent):
-        """Setup the selected objects panel"""
+        """Setup the selected objects panel with Clear All button"""
         selected_frame = ctk.CTkFrame(parent)
         selected_frame.grid(row=0, column=2, padx=10, pady=10, sticky="nsew")
-        selected_frame.grid_rowconfigure(1, weight=1)
+        selected_frame.grid_rowconfigure(2, weight=1)  # ✅ Changed from row 1 to row 2 (listbox now in row 2)
         selected_frame.grid_columnconfigure(0, weight=1)
 
+        # Header label
         ctk.CTkLabel(
             selected_frame,
             text="Selected for Export",
             font=ctk.CTkFont(size=18, weight="bold")
         ).grid(row=0, column=0, pady=(5, 5))
 
+        # ✅ NEW: Clear All button (row 1)
+        self.clear_all_button = ctk.CTkButton(
+            selected_frame,
+            text="🗑️ Clear All",
+            command=self.clear_all_selected_action,
+            height=35,
+            fg_color="#DC3545",  # Red color for destructive action
+            hover_color="#C82333",
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self.clear_all_button.grid(row=1, column=0, padx=10, pady=(0, 5), sticky="ew")
+
+        # Listbox (row 2)
         self.selected_listbox = tk.Listbox(
             selected_frame,
             selectmode="extended",
@@ -1354,7 +1369,7 @@ class SalesforceExporterGUI(ctk.CTk):
             fg="white",
             background="#242424"
         )
-        self.selected_listbox.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
+        self.selected_listbox.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="nsew")
 
 
     def _setup_export_mode_frame(self, parent):
@@ -1507,6 +1522,68 @@ class SalesforceExporterGUI(ctk.CTk):
             self.populate_selected_objects()
             self.filter_available_objects(None)
             self.update_status(f"Removed {len(removed_objects)} object(s) from export list.")
+            
+            
+    def clear_all_selected_action(self):
+        """
+        Clear all objects from the Selected for Export list
+        
+        ✅ Uses confirmation dialog for safety (100+ objects scenario)
+        ✅ Updates UI immediately
+        ✅ Provides feedback via status log
+        """
+        # Check if there are objects to clear
+        if not self.selected_objects:
+            messagebox.showinfo(
+                "Nothing to Clear",
+                "The 'Selected for Export' list is already empty."
+            )
+            return
+        
+        # Get count for confirmation message
+        count = len(self.selected_objects)
+        
+        # ✅ Confirmation dialog (especially important for large selections)
+        if count > 10:
+            # Show detailed confirmation for large selections
+            confirm = messagebox.askyesno(
+                "Confirm Clear All",
+                f"Are you sure you want to remove all {count} objects from the export list?\n\n"
+                f"This action cannot be undone.",
+                icon='warning'
+            )
+        else:
+            # Simple confirmation for small selections
+            confirm = messagebox.askyesno(
+                "Confirm Clear All",
+                f"Remove all {count} object(s) from the export list?",
+                icon='question'
+            )
+        
+        if not confirm:
+            # User cancelled
+            return
+        
+        # ✅ Clear the selected objects set
+        self.selected_objects.clear()
+        
+        # ✅ Update the Selected listbox UI
+        self.populate_selected_objects()
+        
+        # ✅ Refresh the Available listbox to remove blue highlighting
+        self.filter_available_objects(None)
+        
+        # ✅ Log the action
+        self.update_status(f"🗑️ Cleared {count} object(s) from export list.")
+        
+        # ✅ Optional: Show success message for large clears
+        if count > 50:
+            messagebox.showinfo(
+                "Cleared Successfully",
+                f"Removed {count} objects from the export list."
+            )
+            
+
 
     def select_all_available(self):
         """Selects all objects currently visible in the Available ListBox"""
