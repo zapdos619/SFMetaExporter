@@ -60,6 +60,7 @@ def print_content_document_statistics(stats: Dict, runtime_formatted: str, outpu
     print("=" * 70)
     print(f"Total Runtime: {runtime_formatted}")
     print(f"Total ContentDocuments Found:   {stats['total_documents']}")
+    print(f"Total Versions Found:           {stats['total_versions']}")
     print(f"✅ Successfully Downloaded:      {stats['successful_downloads']}")
     print(f"❌ Failed Downloads:             {stats['failed_downloads']}")
 
@@ -73,5 +74,5 @@ def print_content_document_statistics(stats: Dict, runtime_formatted: str, outpu
     if stats['failed_downloads'] > 0:
         print("\n❌ FAILED FILES (REASONS):")
         for detail in stats['failed_files']:
-            print(f"   • {detail['filename']} (ID: {detail['id']}): {detail['reason']}")
+            print(f"   • {detail['filename']} (ID: {detail['id']}, Version: {detail['version']}): {detail['reason']}")
     print("=" * 70)

@@ -18,9 +18,10 @@ class ContentDocumentExporter:
         self.base_url = sf_client.base_url
         self.headers = sf_client.headers
     
+    
     def export_content_documents(self, output_path: str) -> Tuple[str, Dict]:
         """
-        Export ContentDocument metadata to CSV and download all files
+        Export ContentDocument metadata to CSV and download all file versions
         
         Args:
             output_path: Path for the CSV file
@@ -32,6 +33,7 @@ class ContentDocumentExporter:
         
         stats = {
             'total_documents': 0,
+            'total_versions': 0,
             'successful_downloads': 0,
             'failed_downloads': 0,
             'total_size_bytes': 0,
@@ -59,43 +61,97 @@ class ContentDocumentExporter:
             self._create_csv_file([], output_path)
             return output_path, stats
         
-        # Download each file
-        for i, doc in enumerate(content_documents, 1):
+        # This will hold all version data for CSV
+        all_version_data = []
+        
+        # Process each ContentDocument
+        for doc_index, doc in enumerate(content_documents, 1):
             doc_id = doc['Id']
             title = doc['Title']
             file_extension = doc.get('FileExtension', '')
-            file_type = doc.get('FileType', '')
-            content_size = doc.get('ContentSize', 0)
             
-            # Construct filename with extension
-            if file_extension:
-                filename = f"{title}.{file_extension}"
-            else:
-                filename = title
+            self._log_status(f"\n[{doc_index}/{len(content_documents)}] Processing: {title}")
             
-            self._log_status(f"[{i}/{len(content_documents)}] Downloading: {filename}")
+            # Query all versions for this document
+            versions = self._query_all_versions(doc_id)
             
-            try:
-                # Download the file
-                file_path = self._download_file(doc_id, filename, documents_folder)
-                stats['successful_downloads'] += 1
-                stats['total_size_bytes'] += content_size
-                self._log_status(f"  ✅ Downloaded to: {file_path}")
-            except Exception as e:
-                error_msg = str(e)
-                self._log_status(f"  ❌ ERROR: {error_msg}")
-                stats['failed_downloads'] += 1
-                stats['failed_files'].append({
-                    'filename': filename,
-                    'id': doc_id,
-                    'reason': error_msg
-                })
+            if not versions:
+                self._log_status(f"  ⚠️ No versions found for {title}")
+                continue
+            
+            stats['total_versions'] += len(versions)
+            total_versions_count = len(versions)
+            
+            self._log_status(f"  Found {total_versions_count} version(s)")
+            
+            # Download each version
+            for version_index, version in enumerate(versions, 1):
+                version_id = version['Id']
+                version_number = version['VersionNumber']
+                is_latest = version['IsLatest']
+                content_size = version.get('ContentSize', 0)
+                
+                self._log_status(f"  [{version_index}/{total_versions_count}] Downloading version {version_number}...")
+                
+                try:
+                    # Download the file
+                    file_path = self._download_file(
+                        document_id=doc_id,
+                        title=title,
+                        file_extension=file_extension,
+                        version_id=version_id,
+                        version_number=version_number,
+                        destination_folder=documents_folder
+                    )
+                    
+                    # Extract just the filename from full path
+                    downloaded_filename = os.path.basename(file_path)
+                    
+                    # Build PathOnClient (relative path for DataLoader)
+                    path_on_client = f"Documents/{downloaded_filename}"
+                    
+                    stats['successful_downloads'] += 1
+                    stats['total_size_bytes'] += content_size
+                    
+                    self._log_status(f"    ✅ Downloaded: {downloaded_filename}")
+                    
+                    # Build version data for CSV
+                    version_data = {
+                        'document': doc,
+                        'version': version,
+                        'downloaded_filename': downloaded_filename,
+                        'path_on_client': path_on_client,
+                        'version_number': version_number,
+                        'is_latest': is_latest,
+                        'total_versions': total_versions_count
+                    }
+                    
+                    all_version_data.append(version_data)
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    self._log_status(f"    ❌ ERROR: {error_msg}")
+                    stats['failed_downloads'] += 1
+                    
+                    # Build filename for error reporting
+                    if file_extension:
+                        filename = f"{title}_{doc_id}_v{version_number}.{file_extension}"
+                    else:
+                        filename = f"{title}_{doc_id}_v{version_number}"
+                    
+                    stats['failed_files'].append({
+                        'filename': filename,
+                        'id': doc_id,
+                        'version': version_number,
+                        'reason': error_msg
+                    })
         
-        # Create CSV with metadata
+        # Create CSV with all version data
         self._log_status("\n=== Creating CSV File ===")
-        final_output_path = self._create_csv_file(content_documents, output_path)
+        final_output_path = self._create_csv_file(all_version_data, output_path)
         
         return final_output_path, stats
+    
     
     def _query_content_documents(self) -> List[Dict]:
         """Query all ContentDocument records with standard fields"""
@@ -117,41 +173,69 @@ class ContentDocumentExporter:
         except Exception as e:
             self._log_status(f"ERROR querying ContentDocument: {str(e)}")
             raise
-    
-    def _download_file(self, document_id: str, filename: str, destination_folder: str) -> str:
+        
+    def _query_all_versions(self, document_id: str) -> List[Dict]:
         """
-        Download a single file from Salesforce
+        Query all versions for a specific ContentDocument
         
         Args:
             document_id: ContentDocument Id
-            filename: Name for the downloaded file
+            
+        Returns:
+            List of ContentVersion records with version info
+        """
+        try:
+            # Query ALL versions (removed IsLatest = true filter)
+            query = f"""
+                SELECT Id, ContentDocumentId, VersionNumber, IsLatest,
+                    ContentSize, CreatedDate, LastModifiedDate
+                FROM ContentVersion
+                WHERE ContentDocumentId = '{document_id}'
+                ORDER BY VersionNumber ASC
+            """
+            
+            result = self.sf.query(query)
+            return result['records']
+            
+        except Exception as e:
+            self._log_status(f"    ⚠️ Error querying versions for {document_id}: {str(e)}")
+            return []
+    
+    def _download_file(self, document_id: str, title: str, file_extension: str, 
+                    version_id: str, version_number: int, destination_folder: str) -> str:
+        """
+        Download a single file version from Salesforce
+        
+        Args:
+            document_id: ContentDocument Id
+            title: Document title
+            file_extension: File extension
+            version_id: ContentVersion Id
+            version_number: Version number (1, 2, 3, etc.)
             destination_folder: Folder to save the file
             
         Returns:
             Full path of downloaded file
         """
         try:
-            # First, get the latest ContentVersion for this document
-            version_query = f"SELECT Id, VersionData FROM ContentVersion WHERE ContentDocumentId = '{document_id}' AND IsLatest = true"
-            version_result = self.sf.query(version_query)
-            
-            if not version_result['records']:
-                raise Exception("No ContentVersion found")
-            
-            version_id = version_result['records'][0]['Id']
-            
-            # Download the file using VersionData
-            download_url = f"{self.base_url}/services/data/v{self.sf_client.api_version}/sobjects/ContentVersion/{version_id}/VersionData"
-            
-            response = requests.get(download_url, headers=self.headers, timeout=120)
-            response.raise_for_status()
+            # Build filename: {Title}_{ContentDocumentId}_v{VersionNumber}.{Extension}
+            if file_extension:
+                filename = f"{title}_{document_id}_v{version_number}.{file_extension}"
+            else:
+                filename = f"{title}_{document_id}_v{version_number}"
             
             # Sanitize filename to remove invalid characters
             safe_filename = self._sanitize_filename(filename)
-            file_path = os.path.join(destination_folder, safe_filename)
             
-            # Handle duplicate filenames
-            file_path = self._get_unique_filepath(file_path)
+            # Build download URL
+            download_url = f"{self.base_url}/services/data/v{self.sf_client.api_version}/sobjects/ContentVersion/{version_id}/VersionData"
+            
+            # Download the file
+            response = requests.get(download_url, headers=self.headers, timeout=120)
+            response.raise_for_status()
+            
+            # Full file path
+            file_path = os.path.join(destination_folder, safe_filename)
             
             # Write file to disk
             with open(file_path, 'wb') as f:
@@ -160,7 +244,7 @@ class ContentDocumentExporter:
             return file_path
             
         except Exception as e:
-            raise Exception(f"Failed to download: {str(e)}")
+            raise Exception(f"Failed to download version {version_number}: {str(e)}")
     
     def _sanitize_filename(self, filename: str) -> str:
         """Remove invalid characters from filename"""
@@ -169,58 +253,87 @@ class ContentDocumentExporter:
             filename = filename.replace(char, '_')
         return filename
     
-    def _get_unique_filepath(self, filepath: str) -> str:
-        """Generate unique filepath if file already exists"""
-        if not os.path.exists(filepath):
-            return filepath
-        
-        base, extension = os.path.splitext(filepath)
-        counter = 1
-        
-        while os.path.exists(f"{base}_{counter}{extension}"):
-            counter += 1
-        
-        return f"{base}_{counter}{extension}"
+
     
-    def _create_csv_file(self, content_documents: List[Dict], output_path: str) -> str:
-        """Create CSV file with ContentDocument metadata"""
+    def _create_csv_file(self, all_version_data: List[Dict], output_path: str) -> str:
+        """
+        Create CSV file with ContentVersion metadata (DataLoader-ready)
+        
+        Args:
+            all_version_data: List of version data dictionaries
+            output_path: Path for the CSV file
+            
+        Returns:
+            Path to created CSV file
+        """
+        # CSV headers (DataLoader-compatible)
         headers = [
-            'Id', 'Title', 'FileExtension', 'FileType', 'ContentSize (Bytes)',
-            'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById',
-            'OwnerId', 'ParentId', 'IsArchived', 'IsDeleted',
-            'ArchivedDate', 'ArchivedById', 'Description',
-            'PublishStatus', 'LatestPublishedVersionId'
+            # ========== REQUIRED for DataLoader Import ==========
+            'Title',
+            'PathOnClient',
+            
+            # ========== OPTIONAL for DataLoader (Migration Support) ==========
+            'ContentDocumentId',
+            'FirstPublishLocationId',
+            'Description',
+            'Origin',
+            
+            # ========== VERSION METADATA (Reference) ==========
+            'VersionNumber',
+            'IsLatestVersion',
+            'Total_Versions_Available',
+            
+            # ========== FILE METADATA (Reference) ==========
+            'FileExtension',
+            'FileType',
+            'ContentSize (Bytes)',
+            
+            # ========== SALESFORCE METADATA (Reference) ==========
+            'CreatedDate',
+            'LastModifiedDate',
+            'OwnerId'
         ]
         
         with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(headers)
             
-            for doc in content_documents:
+            for version_data in all_version_data:
+                doc = version_data['document']
+                version = version_data['version']
+                
                 row = [
-                    doc.get('Id', ''),
-                    doc.get('Title', ''),
-                    doc.get('FileExtension', ''),
-                    doc.get('FileType', ''),
-                    doc.get('ContentSize', 0),
-                    doc.get('CreatedDate', ''),
-                    doc.get('CreatedById', ''),
-                    doc.get('LastModifiedDate', ''),
-                    doc.get('LastModifiedById', ''),
-                    doc.get('OwnerId', ''),
-                    doc.get('ParentId', ''),
-                    doc.get('IsArchived', False),
-                    doc.get('IsDeleted', False),
-                    doc.get('ArchivedDate', ''),
-                    doc.get('ArchivedById', ''),
-                    doc.get('Description', ''),
-                    doc.get('PublishStatus', ''),
-                    doc.get('LatestPublishedVersionId', '')
+                    # ========== REQUIRED for DataLoader ==========
+                    doc.get('Title', ''),                           # Title
+                    version_data['path_on_client'],                 # PathOnClient (Documents/Report_069gL000C1_v1.pdf)
+                    
+                    # ========== OPTIONAL for DataLoader ==========
+                    doc.get('Id', ''),                              # ContentDocumentId
+                    '',                                              # FirstPublishLocationId (blank - user fills)
+                    doc.get('Description', ''),                     # Description (blank or from doc)
+                    'H',                                             # Origin ('H' = uploaded)
+                    
+                    # ========== VERSION METADATA ==========
+                    version_data['version_number'],                 # VersionNumber (1, 2, 3...)
+                    'TRUE' if version_data['is_latest'] else 'FALSE',  # IsLatestVersion
+                    version_data['total_versions'],                 # Total_Versions_Available
+                    
+                    # ========== FILE METADATA ==========
+                    doc.get('FileExtension', ''),                   # FileExtension
+                    doc.get('FileType', ''),                        # FileType
+                    version.get('ContentSize', 0),                  # ContentSize (Bytes)
+                    
+                    # ========== SALESFORCE METADATA ==========
+                    version.get('CreatedDate', ''),                 # CreatedDate
+                    version.get('LastModifiedDate', ''),            # LastModifiedDate
+                    doc.get('OwnerId', '')                          # OwnerId
                 ]
+                
                 writer.writerow(row)
         
         self._log_status(f"✅ CSV file created: {output_path}")
-        self._log_status(f"✅ Total records exported: {len(content_documents)}")
+        self._log_status(f"✅ Total rows exported: {len(all_version_data)}")
+        
         return output_path
     
     def _log_status(self, message: str):

@@ -1,5 +1,6 @@
 """
 Excel Styling Helper - Provides consistent formatting for Excel exports
+UPDATED: Salesforce official blue colors + enhanced styling
 """
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -10,15 +11,25 @@ from typing import List, Tuple
 class ExcelStyleHelper:
     """Helper class for consistent Excel styling across exports"""
     
-    # Color Scheme - Salesforce Blue with white text
-    HEADER_BG_COLOR = "1F6AA5"  # Salesforce Blue
-    HEADER_TEXT_COLOR = "FFFFFF"  # White
-    TITLE_BG_COLOR = "366092"  # Darker blue for title row
-    TITLE_TEXT_COLOR = "FFFFFF"  # White
+    # ✅ NEW: Salesforce Official Brand Colors
+    # Reference: https://www.salesforce.com/brand/color
+    SALESFORCE_BLUE = "00A1E0"      # Salesforce Blue (lighter, brand primary)
+    SALESFORCE_DARK_BLUE = "032D60" # Salesforce Dark Blue (darker navy)
+    SALESFORCE_LIGHT_BLUE = "E6F4F9" # Very light blue for data rows (NEW)
+    
+    # Header colors (using official Salesforce blue)
+    HEADER_BG_COLOR = "00A1E0"      # ✅ CHANGED: Lighter Salesforce blue
+    HEADER_TEXT_COLOR = "FFFFFF"    # White text
+    TITLE_BG_COLOR = "032D60"       # ✅ CHANGED: Darker Salesforce navy
+    TITLE_TEXT_COLOR = "FFFFFF"     # White text
+    
+    # ✅ NEW: Alternate row coloring for better readability
+    DATA_ROW_EVEN = "FFFFFF"        # White
+    DATA_ROW_ODD = "F7FBFF"         # Very light blue tint
     
     @staticmethod
     def get_title_style():
-        """Get style for title row (Row 1)"""
+        """Get style for title row (Row 1) - Darker Navy Blue"""
         return {
             'font': Font(
                 name='Calibri',
@@ -40,7 +51,7 @@ class ExcelStyleHelper:
     
     @staticmethod
     def get_info_style():
-        """Get style for info row (Row 2)"""
+        """Get style for info row (Row 2) - Lighter Salesforce Blue"""
         return {
             'font': Font(
                 name='Calibri',
@@ -62,7 +73,7 @@ class ExcelStyleHelper:
     
     @staticmethod
     def get_header_style():
-        """Get style for column headers (Row 3)"""
+        """Get style for column headers (Row 3) - Lighter Salesforce Blue"""
         return {
             'font': Font(
                 name='Calibri',
@@ -83,12 +94,24 @@ class ExcelStyleHelper:
         }
     
     @staticmethod
-    def get_data_style():
-        """Get style for data rows"""
+    def get_data_style(is_even_row=True):
+        """
+        Get style for data rows with optional alternating colors
+        
+        Args:
+            is_even_row: If True, use even row color; if False, use odd row color
+        """
+        bg_color = ExcelStyleHelper.DATA_ROW_EVEN if is_even_row else ExcelStyleHelper.DATA_ROW_ODD
+        
         return {
             'font': Font(
                 name='Calibri',
                 size=11
+            ),
+            'fill': PatternFill(
+                start_color=bg_color,
+                end_color=bg_color,
+                fill_type="solid"
             ),
             'alignment': Alignment(
                 horizontal="left",
@@ -126,7 +149,7 @@ class ExcelStyleHelper:
     @staticmethod
     def add_title_row(ws, title: str, num_cols: int, row_num: int = 1):
         """
-        Add formatted title row (Row 1)
+        Add formatted title row (Row 1) - Darker Navy Blue
         
         Args:
             ws: Worksheet
@@ -142,7 +165,7 @@ class ExcelStyleHelper:
         cell = ws.cell(row=row_num, column=1)
         cell.value = title
         
-        # Apply title style
+        # Apply title style (dark navy blue)
         title_style = ExcelStyleHelper.get_title_style()
         ExcelStyleHelper.apply_style_to_cell(cell, title_style)
         
@@ -158,7 +181,7 @@ class ExcelStyleHelper:
     def add_info_row(ws, object_label: str, object_api: str, 
                      record_count: int, num_cols: int, row_num: int = 2):
         """
-        Add formatted info row (Row 2)
+        Add formatted info row (Row 2) - Lighter Salesforce Blue
         
         Args:
             ws: Worksheet
@@ -180,7 +203,7 @@ class ExcelStyleHelper:
         cell = ws.cell(row=row_num, column=1)
         cell.value = info_text
         
-        # Apply info style
+        # Apply info style (lighter blue)
         info_style = ExcelStyleHelper.get_info_style()
         ExcelStyleHelper.apply_style_to_cell(cell, info_style)
         
@@ -195,7 +218,7 @@ class ExcelStyleHelper:
     @staticmethod
     def add_header_row(ws, headers: List[str], row_num: int = 3):
         """
-        Add formatted header row (Row 3)
+        Add formatted header row (Row 3) - Lighter Salesforce Blue
         
         Args:
             ws: Worksheet

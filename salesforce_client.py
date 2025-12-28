@@ -1,8 +1,10 @@
 """
 Salesforce connection and authentication handler
+✅ FIXED: Detects expired passwords and shows clear error messages
 """
 from typing import List, Optional, Callable
 from simple_salesforce import Salesforce
+from simple_salesforce.exceptions import SalesforceExpiredSession
 from config import API_VERSION
 
 
@@ -10,7 +12,7 @@ class SalesforceClient:
     """Handles Salesforce authentication and connection"""
     
     def __init__(self, username: str, password: str, security_token: str, 
-                 domain: str = 'login', status_callback: Optional[Callable] = None):
+                domain: str = 'login', status_callback: Optional[Callable] = None):
         """
         Initialize Salesforce connection
         
@@ -25,24 +27,22 @@ class SalesforceClient:
         self.status_callback = status_callback
         self.all_org_objects: List[str] = []
         
-        # ✅ FIX 1: Initialize these BEFORE connection attempt
+        # ✅ Initialize these BEFORE connection attempt
         self.sf = None
         self.base_url = None
         self.session_id = None
-        self.api_version = API_VERSION  # ✅ Use constant, not sf.sf_version
+        self.api_version = API_VERSION
         self.headers = None
         
         self._log_status("Initializing Salesforce Connection...")
         
         try:
-            # ✅ CRITICAL: Detect domain type
+            # ✅ Detect domain type
             is_custom_domain = domain not in ['login', 'test']
             
             if is_custom_domain:
-                # ✅ Custom domain - use directly (gui.py already cleaned it)
                 self._log_status(f"🌐 Using custom domain: {domain}")
                 
-                # ✅ FIX 2: Pass security_token correctly (None if not provided)
                 self.sf = Salesforce(
                     username=username,
                     password=password,
@@ -50,7 +50,6 @@ class SalesforceClient:
                     domain=domain
                 )
             else:
-                # ✅ Standard domain (login or test)
                 org_type = "Production" if domain == 'login' else "Sandbox"
                 self._log_status(f"🏢 Connecting to {org_type} org...")
                 
@@ -61,14 +60,14 @@ class SalesforceClient:
                     domain=domain
                 )
             
-            # ✅ FIX 3: Verify connection was successful BEFORE extracting data
+            # ✅ Verify connection was successful
             if not self.sf:
                 raise Exception("Salesforce connection object is None")
             
             if not hasattr(self.sf, 'session_id') or not self.sf.session_id:
                 raise Exception("No session_id - authentication failed")
             
-            # ✅ FIX 4: Extract session info with validation
+            # ✅ Extract session info with validation
             self.session_id = self.sf.session_id
             
             # Get instance URL
@@ -78,8 +77,7 @@ class SalesforceClient:
                 # Fallback for older simple-salesforce versions
                 self.base_url = f"https://{domain}.salesforce.com"
             
-            # ✅ FIX 5: Use API_VERSION constant (from config.py)
-            # Don't rely on self.sf.sf_version as it may be formatted differently
+            # ✅ Use API_VERSION constant
             self.api_version = API_VERSION
             
             # Setup headers
@@ -95,9 +93,9 @@ class SalesforceClient:
                 self._log_status(f"✅ Connected to: {self.base_url}")
             
             self._log_status(f"📡 API Version: v{self.api_version}")
-            self._log_status(f"🔑 Session ID: {self.session_id[:20]}...")
+            self._log_status(f"🔑 Session established successfully")
             
-            # ✅ FIX 6: Fetch objects AFTER connection is fully initialized
+            # ✅ Fetch objects AFTER connection is fully initialized
             self._fetch_all_org_objects()
             
         except Exception as e:
@@ -114,92 +112,103 @@ class SalesforceClient:
     def _fetch_all_org_objects(self):
         """
         Fetches all SObjects (Standard and Custom) from the org.
-        
-        ✅ FIXED: Better validation and error messages
+        ✅ FIXED: Detects expired passwords and other auth issues
         """
         self._log_status("Fetching all available SObjects from the organization...")
         
-        # ✅ FIX 7: Verify we have a valid connection BEFORE calling describe()
-        if not self.sf:
-            raise Exception("Cannot fetch objects - Salesforce connection not initialized")
-        
-        if not self.session_id:
-            raise Exception("Cannot fetch objects - No valid session")
-        
         try:
-            # ✅ Call describe() API
-            self._log_status("📞 Calling sf.describe() API...")
-            response = self.sf.describe()
+            # Verify connection first
+            if not self.sf:
+                raise Exception("Salesforce connection not initialized")
             
-            # ✅ Validate response structure
-            if not response:
-                self._log_status("⚠️ describe() returned empty response")
-                raise Exception(
-                    "Salesforce describe() returned empty response.\n\n"
-                    "Possible causes:\n"
-                    "• 'View All Data' permission is missing\n"
-                    "• API access is disabled\n"
-                    "• Session expired during connection"
-                )
+            if not self.session_id:
+                raise Exception("No valid Salesforce session")
             
-            if not isinstance(response, dict):
-                raise TypeError(f"Invalid response type: {type(response)}")
+            # Call describe() API
+            self._log_status("📞 Calling Salesforce describe() API...")
             
-            if 'sobjects' not in response:
-                raise KeyError("Response missing 'sobjects' field")
+            try:
+                response = self.sf.describe()
+            except SalesforceExpiredSession as e:
+                # ✅ DETECT EXPIRED PASSWORD
+                error_str = str(e).lower()
+                
+                if 'password has expired' in error_str or 'expired_password' in error_str:
+                    self._log_status("❌ PASSWORD EXPIRED")
+                    raise Exception(
+                        "🔐 Your Salesforce password has expired!\n\n"
+                        "To fix this:\n"
+                        "1. Go to your Salesforce org\n"
+                        "2. Reset your password (Setup → Change Password)\n"
+                        "3. Get new security token (Setup → My Personal Info → Reset Security Token)\n"
+                        "4. Use the new password + token to log in again\n\n"
+                        f"Technical error: {str(e)}"
+                    )
+                else:
+                    # Other expired session errors
+                    raise Exception(f"Session expired: {str(e)}")
+            
+            if not response or not isinstance(response, dict):
+                raise Exception("Invalid response from Salesforce describe()")
             
             sobjects = response.get('sobjects', [])
             
-            if not isinstance(sobjects, list):
-                raise TypeError(f"Invalid sobjects type: {type(sobjects)}")
+            if not sobjects:
+                self._log_status("⚠️ No SObjects returned from describe()")
+                self.all_org_objects = []
+                return
             
-            # ✅ Log raw count for debugging
-            self._log_status(f"📊 Total objects returned: {len(sobjects)}")
+            self._log_status(f"📊 Received {len(sobjects)} total objects from Salesforce")
             
-            # ✅ Filter queryable objects
-            all_objects = [
+            # Filter for queryable, non-deprecated objects
+            queryable_objects = [
                 obj['name'] for obj in sobjects 
                 if obj.get('queryable', False) and not obj.get('deprecatedAndHidden', False)
             ]
             
-            self._log_status(f"🔍 Queryable objects after filtering: {len(all_objects)}")
-            
-            # ✅ FIX 8: Set all_org_objects even if empty (so GUI can show proper message)
-            self.all_org_objects = sorted(all_objects)
+            # Sort and store
+            self.all_org_objects = sorted(queryable_objects)
             
             if not self.all_org_objects:
-                # ⚠️ No objects found - log detailed info
-                self._log_status("⚠️ No queryable objects found!")
+                self._log_status("⚠️ No queryable objects found after filtering")
+                self._log_status("⚠️ This usually means insufficient permissions")
                 
-                # Count different object types for diagnosis
-                total = len(sobjects)
+                # Show breakdown
                 queryable_count = sum(1 for obj in sobjects if obj.get('queryable', False))
-                hidden_count = sum(1 for obj in sobjects if obj.get('deprecatedAndHidden', False))
+                deprecated_count = sum(1 for obj in sobjects if obj.get('deprecatedAndHidden', False))
                 
-                self._log_status(f"  Total objects: {total}")
-                self._log_status(f"  Queryable: {queryable_count}")
-                self._log_status(f"  Hidden/Deprecated: {hidden_count}")
-                
-                # Don't raise error - let GUI handle empty list
-                self._log_status("⚠️ Continuing with empty object list...")
+                self._log_status(f"📊 Breakdown:")
+                self._log_status(f"  - Total objects: {len(sobjects)}")
+                self._log_status(f"  - Queryable: {queryable_count}")
+                self._log_status(f"  - Deprecated: {deprecated_count}")
+                self._log_status(f"  - Final (queryable + not deprecated): {len(self.all_org_objects)}")
             else:
-                # ✅ SUCCESS
-                self._log_status(f"✅ Found {len(self.all_org_objects)} queryable objects.")
+                self._log_status(f"✅ Found {len(self.all_org_objects)} queryable objects")
                 
-                # Log first 5 objects for verification
+                # Show sample
                 sample = ', '.join(self.all_org_objects[:5])
-                self._log_status(f"📦 Sample: {sample}...")
+                if len(self.all_org_objects) > 5:
+                    sample += f", ... (+{len(self.all_org_objects) - 5} more)"
+                self._log_status(f"📦 Sample objects: {sample}")
         
         except Exception as e:
             error_msg = str(e)
             self._log_status(f"❌ Failed to fetch SObjects: {error_msg}")
             
-            # ✅ FIX 9: Set empty list instead of raising (GUI will show warning)
+            # Set empty list on error
             self.all_org_objects = []
             
-            # Log full error details
+            # Log detailed error for debugging
             import traceback
-            self._log_status(f"🔍 Full error:\n{traceback.format_exc()}")
+            traceback_str = traceback.format_exc()
+            print(f"❌ DETAILED ERROR in _fetch_all_org_objects:\n{traceback_str}")
+            
+            # ✅ RE-RAISE if it's a password expiry error (so GUI can show it)
+            if 'password has expired' in error_msg.lower() or 'expired_password' in error_msg.lower():
+                raise
+            else:
+                # Other errors - log but don't crash
+                self._log_status(f"🔍 Technical details logged to console")
     
     def get_all_objects(self) -> List[str]:
         """Accessor for the fetched object list"""

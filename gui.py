@@ -833,10 +833,36 @@ class SalesforceExporterGUI(ctk.CTk):
             self.all_org_objects = []
             object_count = 0
         
-        # ✅ FIX 2: Initialize exporters IMMEDIATELY (before checking object count)
-        self.picklist_exporter = PicklistExporter(self.sf_client)
-        self.metadata_exporter = MetadataExporter(self.sf_client)
-        self.content_document_exporter = ContentDocumentExporter(self.sf_client)
+        # ✅ FIX 2: Initialize exporters IMMEDIATELY (before checking object count) WITH ERROR HANDLING
+        try:
+            self.update_status("🔧 Initializing Picklist Exporter...")
+            self.picklist_exporter = PicklistExporter(self.sf_client)
+            self.update_status("✅ Picklist Exporter initialized")
+        except Exception as e:
+            self.update_status(f"❌ ERROR initializing Picklist Exporter: {str(e)}")
+            import traceback
+            self.update_status(f"🔍 Stack trace:\n{traceback.format_exc()}")
+            self.picklist_exporter = None
+        
+        try:
+            self.update_status("🔧 Initializing Metadata Exporter...")
+            self.metadata_exporter = MetadataExporter(self.sf_client)
+            self.update_status("✅ Metadata Exporter initialized")
+        except Exception as e:
+            self.update_status(f"❌ ERROR initializing Metadata Exporter: {str(e)}")
+            import traceback
+            self.update_status(f"🔍 Stack trace:\n{traceback.format_exc()}")
+            self.metadata_exporter = None
+        
+        try:
+            self.update_status("🔧 Initializing ContentDocument Exporter...")
+            self.content_document_exporter = ContentDocumentExporter(self.sf_client)
+            self.update_status("✅ ContentDocument Exporter initialized")
+        except Exception as e:
+            self.update_status(f"❌ ERROR initializing ContentDocument Exporter: {str(e)}")
+            import traceback
+            self.update_status(f"🔍 Stack trace:\n{traceback.format_exc()}")
+            self.content_document_exporter = None
         
         # Determine connection type
         if self.custom_domain_var.get():
@@ -934,7 +960,10 @@ class SalesforceExporterGUI(ctk.CTk):
         )
         
         # ✅ ADD THIS AT THE VERY END:
-        self._verify_exporters()  # Debug check
+        self._verify_exporters()  # Debug check 
+ 
+ 
+ 
         
         
 
@@ -2419,6 +2448,7 @@ class SalesforceExporterGUI(ctk.CTk):
 
         ThreadHelper.run_in_thread(do_export)
 
+
     def _on_download_files_success(self, output_path, stats, runtime_formatted):
         """Called after successful file downloads"""
         self.update_status(f"Export Complete! Total Runtime: {runtime_formatted}")
@@ -2427,17 +2457,24 @@ class SalesforceExporterGUI(ctk.CTk):
         csv_dir = os.path.dirname(output_path)
         documents_folder = os.path.join(csv_dir, "Documents")
 
-        messagebox.showinfo(
-            "Export Done",
-            f"ContentDocument data exported to:\n{output_path}\n\nFiles downloaded to:\n{documents_folder}"
+        # Build success message
+        message = (
+            f"ContentDocument export completed!\n\n"
+            f"Documents Found: {stats['total_documents']}\n"
+            f"Total Versions: {stats['total_versions']}\n"
+            f"Successfully Downloaded: {stats['successful_downloads']}\n"
+            f"Failed: {stats['failed_downloads']}\n\n"
+            f"CSV File: {output_path}\n"
+            f"Files Folder: {documents_folder}\n\n"
+            f"💡 CSV is DataLoader-ready for migration!"
         )
+
+        messagebox.showinfo("Export Done", message)
 
         print_content_document_statistics(stats, runtime_formatted, output_path, documents_folder)
 
-        # ✅ NEW: Re-enable all buttons
+        # ✅ Re-enable all buttons
         self.button_manager.end_operation()
-
-        # ✅ REMOVE OLD CODE: Delete button re-enable lines
 
     def _on_download_files_error(self, error_message):
         """Called when file download fails"""
