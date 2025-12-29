@@ -1304,7 +1304,8 @@ class PicklistExporter:
     
     def _is_global_picklist(self, field: dict) -> bool:
         """
-        ✅ NEW METHOD: Detect if a picklist field uses a Global Value Set
+        ✅ ENHANCED: Detect if a picklist field uses a Global Value Set
+        Now with detailed debug logging to diagnose the issue
         
         Args:
             field: Field describe dictionary
@@ -1313,26 +1314,63 @@ class PicklistExporter:
             True if field uses global value set, False otherwise
         """
         try:
-            # Check for valueSet with restricted=true and valueSetName
+            field_name = field.get('name', 'unknown')
+            field_type = field.get('type', 'unknown')
+            
+            # ✅ DEBUG LOG 1: Field basics
+            self._log_status(f"    🔍 Analyzing field: {field_name} (type: {field_type})")
+            
+            # Check if valueSet exists
             value_set = field.get('valueSet')
             
             if not value_set:
+                self._log_status(f"       ❌ No valueSet found for {field_name}")
                 return False
             
-            # Global picklists have:
-            # 1. restricted = true (or false, but usually true)
-            # 2. valueSetName is not None (references global value set)
+            # ✅ DEBUG LOG 2: Show valueSet structure
+            self._log_status(f"       ✅ valueSet exists")
+            self._log_status(f"       📦 valueSet keys: {list(value_set.keys())}")
             
+            # Check for valueSetName (primary indicator of global picklist)
             value_set_name = value_set.get('valueSetName')
             
-            # If valueSetName exists, it's a global picklist
+            # ✅ DEBUG LOG 3: Show valueSetName details
+            self._log_status(f"       🔑 valueSetName: {repr(value_set_name)}")
+            self._log_status(f"       🔑 valueSetName type: {type(value_set_name).__name__}")
+            
+            # Check if valueSetName is valid (not None, not empty string)
             if value_set_name:
-                return True
+                if isinstance(value_set_name, str) and value_set_name.strip():
+                    self._log_status(f"       ✅ GLOBAL PICKLIST DETECTED: {value_set_name}")
+                    return True
+                else:
+                    self._log_status(f"       ⚠️ valueSetName exists but is empty/invalid")
+            else:
+                self._log_status(f"       ℹ️ No valueSetName (likely local picklist)")
+            
+            # ✅ DEBUG LOG 4: Check for other relevant fields
+            restricted = value_set.get('restricted')
+            controller_name = value_set.get('controllerName')
+            has_definition = 'valueSetDefinition' in value_set
+            
+            self._log_status(f"       📋 restricted: {restricted}")
+            self._log_status(f"       📋 controllerName: {controller_name}")
+            self._log_status(f"       📋 has valueSetDefinition: {has_definition}")
+            
+            # ✅ DEBUG LOG 5: Final decision
+            self._log_status(f"       ❌ NOT a global picklist")
             
             return False
             
         except Exception as e:
-            self._log_status(f"    ⚠️  Error checking global picklist: {str(e)}")
+            error_msg = str(e)
+            self._log_status(f"    ⚠️ ERROR checking global picklist for {field.get('name', 'unknown')}: {error_msg}")
+            
+            # ✅ DEBUG LOG 6: Show exception details
+            import traceback
+            traceback_str = traceback.format_exc()
+            self._log_status(f"    📜 Traceback:\n{traceback_str}")
+            
             return False
     
     def _resolve_entity_definition_id(self, object_name: str) -> Optional[str]:

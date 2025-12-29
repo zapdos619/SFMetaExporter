@@ -1217,7 +1217,7 @@ class SalesforceExporterGUI(ctk.CTk):
             text="Export Picklist Data",
             command=self.export_picklist_action,
             height=50,
-            fg_color="green",
+            fg_color="#2D7BD4",
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.export_picklist_button.grid(row=0, column=0, sticky="ew", padx=(0, 5))
@@ -1227,7 +1227,7 @@ class SalesforceExporterGUI(ctk.CTk):
             text="Export Metadata",
             command=self.export_metadata_action,
             height=50,
-            fg_color="#1F538D",
+            fg_color="#2D7BD4",
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.export_metadata_button.grid(row=0, column=1, sticky="ew", padx=(5, 5))
@@ -1237,7 +1237,7 @@ class SalesforceExporterGUI(ctk.CTk):
             text="Download Files",
             command=self.download_files_action,
             height=50,
-            fg_color="#FF6B35",
+            fg_color="#2D7BD4",
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.download_files_button.grid(row=0, column=2, sticky="ew", padx=(5, 5))
@@ -1247,7 +1247,7 @@ class SalesforceExporterGUI(ctk.CTk):
             text="Run SOQL",
             command=self.run_soql_action,
             height=50,
-            fg_color="#9B59B6",
+            fg_color="#2D7BD4",
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.run_soql_button.grid(row=0, column=3, sticky="ew", padx=(5, 5))
@@ -1257,7 +1257,7 @@ class SalesforceExporterGUI(ctk.CTk):
             text="Salesforce Switch",
             command=self.salesforce_switch_action,
             height=50,
-            fg_color="#E74C3C",
+            fg_color="#2D7BD4",
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.salesforce_switch_button.grid(row=0, column=4, sticky="ew", padx=(5, 0))
@@ -1267,8 +1267,8 @@ class SalesforceExporterGUI(ctk.CTk):
             text="📊 Report Export",
             command=self.report_exporter_action,
             height=50,
-            fg_color="#16A085",
-            hover_color="#138D75",
+            fg_color="#2D7BD4",
+            hover_color="#2D7BD4",
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.report_exporter_button.grid(row=0, column=5, sticky="ew", padx=(5, 0))

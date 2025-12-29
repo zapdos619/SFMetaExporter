@@ -14,7 +14,7 @@ class ExcelStyleHelper:
     # ✅ NEW: Salesforce Official Brand Colors
     # Reference: https://www.salesforce.com/brand/color
     SALESFORCE_BLUE = "00A1E0"      # Salesforce Blue (lighter, brand primary)
-    SALESFORCE_DARK_BLUE = "032D60" # Salesforce Dark Blue (darker navy)
+    SALESFORCE_DARK_BLUE = "00A1E0" # Salesforce Dark Blue (darker navy)
     SALESFORCE_LIGHT_BLUE = "E6F4F9" # Very light blue for data rows (NEW)
     
     # Header colors (using official Salesforce blue)
@@ -124,7 +124,7 @@ class ExcelStyleHelper:
     @staticmethod
     def _get_border(style='medium'):
         """Get border style"""
-        side = Side(style=style, color="000000")
+        side = Side(style=style, color="FFFFFF")
         return Border(left=side, right=side, top=side, bottom=side)
     
     @staticmethod
