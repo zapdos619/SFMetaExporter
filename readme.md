@@ -282,6 +282,68 @@ export SF_ORG_TYPE="Production"
 
 ---
 
+## 🏗️ Building Executable for macOS ".app"
+
+Create a standalone macOS executable or .app bundle
+(no Python installation required on the target machine).
+
+⚠️ Important
+- The build must be created on macOS
+- Python must be installed on the build machine
+- Requires macOS 11+ for universal builds
+
+### Create a virtual environment
+```bash
+python3 -m venv venv
+```
+
+### Activate the virtual environment
+```bash
+source venv/bin/activate
+```
+
+### Upgrade pip
+```bash
+pip install --upgrade pip
+```
+
+### Install the dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### Install PyInstaller for creating the build
+```bash
+pip install pyinstaller
+```
+
+### Build Single File Executable
+
+**Recommended (most portable):**
+For Intel + Apple Silicon architecture (Universal Binary)
+```bash
+pyinstaller \
+  --onefile \
+  --windowed \
+  --name "SF_Meta_Exporter" \
+  --icon=app_icon.icns \
+  --target-arch universal2 \
+  --add-data "app_icon.icns:." \
+  main.py
+```
+
+**Single architecture (either Apple Silicon or Intel):**
+```bash
+pyinstaller \
+  --onefile \
+  --windowed \
+  --name "SF_Meta_Exporter" \
+  --icon=app_icon.icns \
+  --add-data "app_icon.icns:." \
+  main.py
+```
+---
+---
 ## 🏗️ Building Executable
 
 Create a portable `.exe` file for Windows deployment (no Python installation required).
