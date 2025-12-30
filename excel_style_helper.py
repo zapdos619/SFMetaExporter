@@ -124,7 +124,7 @@ class ExcelStyleHelper:
     @staticmethod
     def _get_border(style='medium'):
         """Get border style"""
-        side = Side(style=style, color="FFFFFF")
+        side = Side(style=style, color="ABABAB")
         return Border(left=side, right=side, top=side, bottom=side)
     
     @staticmethod

@@ -4,6 +4,7 @@ Picklist export functionality
 UPDATED: Added IsGlobal? column detection and updated headers
 """
 import requests
+import urllib.parse
 from typing import List, Dict, Optional, Tuple
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -1280,7 +1281,7 @@ class PicklistExporter:
         """
         Get all picklist fields for an object
         
-        ✅ UPDATED: Now detects global picklists
+        ✅ FIXED: Uses Tooling API to accurately detect global picklists
         """
         fields_dict = {}
         try:
@@ -1288,13 +1289,13 @@ class PicklistExporter:
             
             for field in obj_describe['fields']:
                 if field['type'] in ['picklist', 'multipicklist']:
-                    # ✅ NEW: Check if field uses global value set
-                    is_global = self._is_global_picklist(field)
+                    # ✅ NEW: Use Tooling API to check if global
+                    is_global = self._is_global_picklist_tooling(object_name, field['name'])
                     
                     fields_dict[field['name']] = FieldInfo(
                         api_name=field['name'], 
                         label=field['label'],
-                        is_global=is_global  # ✅ NEW
+                        is_global=is_global
                     )
                     
         except Exception as e:
@@ -1302,76 +1303,159 @@ class PicklistExporter:
             
         return fields_dict
     
-    def _is_global_picklist(self, field: dict) -> bool:
+
+    def _is_global_picklist_tooling(self, object_name: str, field_name: str) -> bool:
         """
-        ✅ ENHANCED: Detect if a picklist field uses a Global Value Set
-        Now with detailed debug logging to diagnose the issue
+        ✅ FIXED: Accurately detect if a picklist uses a Global Value Set
+        
+        The ONLY reliable way to detect a global value set is to check if
+        valueSetName exists in the metadata.
         
         Args:
-            field: Field describe dictionary
+            object_name: Object API name (e.g., 'Opportunity')
+            field_name: Field API name (e.g., 'Industry')
             
         Returns:
             True if field uses global value set, False otherwise
         """
         try:
-            field_name = field.get('name', 'unknown')
-            field_type = field.get('type', 'unknown')
+            # ✅ For custom fields, use CustomField API (more reliable)
+            if field_name.endswith('__c'):
+                return self._check_custom_field_global(object_name, field_name)
             
-            # ✅ DEBUG LOG 1: Field basics
-            self._log_status(f"    🔍 Analyzing field: {field_name} (type: {field_type})")
+            # ✅ For standard fields, use FieldDefinition API
+            qualified_field_name = f"{object_name}.{field_name}"
             
-            # Check if valueSet exists
-            value_set = field.get('valueSet')
+            query = (
+                f"SELECT QualifiedApiName, Metadata "
+                f"FROM FieldDefinition "
+                f"WHERE QualifiedApiName = '{qualified_field_name}'"
+            )
             
-            if not value_set:
-                self._log_status(f"       ❌ No valueSet found for {field_name}")
+            import urllib.parse
+            encoded_query = urllib.parse.quote(query)
+            url = f"{self.base_url}/services/data/v{self.api_version}/tooling/query/?q={encoded_query}"
+            
+            response = requests.get(url, headers=self.headers, timeout=30)
+            
+            if response.status_code != 200:
                 return False
             
-            # ✅ DEBUG LOG 2: Show valueSet structure
-            self._log_status(f"       ✅ valueSet exists")
-            self._log_status(f"       📦 valueSet keys: {list(value_set.keys())}")
+            data = response.json()
+            records = data.get('records', [])
             
-            # Check for valueSetName (primary indicator of global picklist)
+            if not records:
+                return False
+            
+            metadata = records[0].get('Metadata', {})
+            if not metadata:
+                return False
+            
+            value_set = metadata.get('valueSet', {})
+            if not value_set:
+                return False
+            
+            # ✅ THE ONLY RELIABLE CHECK: Does valueSetName exist?
+            # valueSetName points to the Global Value Set name
             value_set_name = value_set.get('valueSetName')
             
-            # ✅ DEBUG LOG 3: Show valueSetName details
-            self._log_status(f"       🔑 valueSetName: {repr(value_set_name)}")
-            self._log_status(f"       🔑 valueSetName type: {type(value_set_name).__name__}")
-            
-            # Check if valueSetName is valid (not None, not empty string)
             if value_set_name:
-                if isinstance(value_set_name, str) and value_set_name.strip():
-                    self._log_status(f"       ✅ GLOBAL PICKLIST DETECTED: {value_set_name}")
-                    return True
-                else:
-                    self._log_status(f"       ⚠️ valueSetName exists but is empty/invalid")
+                self._log_status(f"    ✅ {field_name}: Global picklist (valueSetName: {value_set_name})")
+                return True
             else:
-                self._log_status(f"       ℹ️ No valueSetName (likely local picklist)")
+                self._log_status(f"    ℹ️ {field_name}: Local picklist")
+                return False
             
-            # ✅ DEBUG LOG 4: Check for other relevant fields
-            restricted = value_set.get('restricted')
-            controller_name = value_set.get('controllerName')
-            has_definition = 'valueSetDefinition' in value_set
+        except Exception as e:
+            self._log_status(f"    ⚠️ Error checking {field_name}: {str(e)}")
+            return False
+
+
+    def _check_custom_field_global(self, object_name: str, field_name: str) -> bool:
+        """
+        ✅ Check if a CUSTOM field uses a Global Value Set
+        Uses CustomField Tooling API which is more reliable for custom fields
+        
+        Args:
+            object_name: Object API name
+            field_name: Custom field API name (must end with __c)
             
-            self._log_status(f"       📋 restricted: {restricted}")
-            self._log_status(f"       📋 controllerName: {controller_name}")
-            self._log_status(f"       📋 has valueSetDefinition: {has_definition}")
+        Returns:
+            True if field uses global value set, False otherwise
+        """
+        try:
+            # Remove __c suffix to get DeveloperName
+            dev_name = field_name[:-3]
             
-            # ✅ DEBUG LOG 5: Final decision
-            self._log_status(f"       ❌ NOT a global picklist")
+            query = (
+                f"SELECT Id, DeveloperName, Metadata "
+                f"FROM CustomField "
+                f"WHERE TableEnumOrId = '{object_name}' "
+                f"AND DeveloperName = '{dev_name}'"
+            )
             
+            import urllib.parse
+            encoded_query = urllib.parse.quote(query)
+            url = f"{self.base_url}/services/data/v{self.api_version}/tooling/query/?q={encoded_query}"
+            
+            response = requests.get(url, headers=self.headers, timeout=30)
+            
+            if response.status_code != 200:
+                return False
+            
+            data = response.json()
+            records = data.get('records', [])
+            
+            if not records:
+                return False
+            
+            metadata = records[0].get('Metadata', {})
+            value_set = metadata.get('valueSet', {})
+            
+            # ✅ THE DEFINITIVE CHECK: valueSetName exists = Global Value Set
+            value_set_name = value_set.get('valueSetName')
+            
+            if value_set_name:
+                self._log_status(f"    ✅ {field_name}: Global picklist (valueSetName: {value_set_name})")
+                return True
+            else:
+                self._log_status(f"    ℹ️ {field_name}: Local picklist")
+                return False
+            
+        except Exception as e:
+            self._log_status(f"    ⚠️ Error checking {field_name}: {str(e)}")
+            return False
+
+
+    def _is_global_picklist_describe(self, object_name: str, field_name: str) -> bool:
+        """
+        ⚠️ FALLBACK METHOD: Use standard describe() API
+        This is a last-resort fallback if Tooling API fails
+        
+        Note: describe() doesn't reliably indicate global value sets,
+        so this method returns False by default for safety.
+        
+        Args:
+            object_name: Object API name
+            field_name: Field API name
+            
+        Returns:
+            False (describe API doesn't provide global value set info)
+        """
+        try:
+            # The standard describe() API doesn't include information about
+            # whether a picklist uses a Global Value Set or not.
+            # It only shows the picklist values themselves.
+            
+            self._log_status(f"    ℹ️ {field_name}: Using fallback describe (cannot detect global)")
             return False
             
         except Exception as e:
-            error_msg = str(e)
-            self._log_status(f"    ⚠️ ERROR checking global picklist for {field.get('name', 'unknown')}: {error_msg}")
-            
-            # ✅ DEBUG LOG 6: Show exception details
-            import traceback
-            traceback_str = traceback.format_exc()
-            self._log_status(f"    📜 Traceback:\n{traceback_str}")
-            
+            self._log_status(f"    ⚠️ Error in describe fallback for {field_name}: {str(e)}")
             return False
+
+
+
     
     def _resolve_entity_definition_id(self, object_name: str) -> Optional[str]:
         """Resolve EntityDefinition ID for an object"""

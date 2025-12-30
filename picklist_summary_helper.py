@@ -15,6 +15,7 @@ class PicklistSummaryData:
     def __init__(self, object_name: str, object_api: str):
         self.object_name = object_name
         self.object_api = object_api
+        self.total_picklist_fields = 0  # ✅ NEW: Total count of all picklist fields
         self.standard_picklist_count = 0
         self.global_picklist_count = 0
         self.dependent_picklist_count = 0
@@ -29,6 +30,7 @@ class PicklistSummaryData:
             serial_number,
             self.object_name,
             self.object_api,
+            self.total_picklist_fields,  # ✅ NEW: Total Picklist Fields column
             self.standard_picklist_count,
             self.global_picklist_count,
             self.dependent_picklist_count,
@@ -42,11 +44,12 @@ class PicklistSummaryData:
 class PicklistSummaryHelper:
     """Helper class for creating picklist summary tabs"""
     
-    # Summary tab headers
+    # ✅ UPDATED: Summary tab headers with new column
     SUMMARY_HEADERS = [
         'SL',
         'Object Name',
         'Object API',
+        'Total Picklist Fields',  # ✅ NEW COLUMN
         'Standard Picklist',
         'Global Picklist',
         'Dependent Picklist',
@@ -128,7 +131,8 @@ class PicklistSummaryHelper:
         if summary_data:
             totals_row_num = len(summary_data) + 4
             
-            # Calculate totals
+            # ✅ Calculate totals (including new Total Picklist Fields)
+            total_fields = sum(s.total_picklist_fields for s in summary_data)
             total_standard = sum(s.standard_picklist_count for s in summary_data)
             total_global = sum(s.global_picklist_count for s in summary_data)
             total_dependent = sum(s.dependent_picklist_count for s in summary_data)
@@ -140,6 +144,7 @@ class PicklistSummaryHelper:
                 "",  # SL
                 "TOTAL",  # Object Name
                 "",  # Object API
+                total_fields,  # ✅ NEW: Total Picklist Fields
                 total_standard,
                 total_global,
                 total_dependent,
@@ -237,6 +242,9 @@ class PicklistSummaryHelper:
                     summary.standard_picklist_count += 1
                 elif is_custom:
                     summary.custom_picklist_count += 1
+        
+        # ✅ NEW: Set total picklist fields count
+        summary.total_picklist_fields = len(seen_fields)
         
         # ✅ Check for dependent picklists (requires Salesforce API call)
         summary.dependent_picklist_count = PicklistSummaryHelper._count_dependent_picklists(
