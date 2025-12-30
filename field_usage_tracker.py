@@ -179,12 +179,24 @@ class FieldUsageTracker:
 
                     # Parse layoutItems to find fields on the layout
                     layout_sections = metadata.get('layoutSections', [])
+                    
+                    # Safety check: ensure layout_sections is not None
+                    if not layout_sections:
+                        layout_sections = []
 
                     for section in layout_sections:
                         layout_columns = section.get('layoutColumns', [])
+                        
+                        # Safety check: ensure layout_columns is not None
+                        if not layout_columns:
+                            layout_columns = []
 
                         for column in layout_columns:
                             layout_items = column.get('layoutItems', [])
+                            
+                            # Safety check: ensure layout_items is not None
+                            if not layout_items:
+                                layout_items = []
 
                             for item in layout_items:
                                 field_name = item.get('field')
@@ -394,37 +406,55 @@ class FieldUsageTracker:
         return field_usage
 
     def _get_validation_rule_usage(self, object_name: str) -> Dict[str, Set[str]]:
-        """Get validation rule usage for object fields"""
+        """Get validation rule usage for object fields (FIXED: Query one record at a time)"""
         field_usage = {}
 
         try:
-            soql = f"SELECT ValidationName, Metadata FROM ValidationRule WHERE EntityDefinition.QualifiedApiName = '{object_name}'"
+            # First, get list of ValidationRule IDs (without Metadata - avoids the "no more than one row" error)
+            soql = f"SELECT Id, ValidationName FROM ValidationRule WHERE EntityDefinition.QualifiedApiName = '{object_name}'"
             result = self._tooling_query(soql)
 
+            # Now query each validation rule individually with Metadata
             for rule in result.get('records', []):
+                rule_id = rule.get('Id', '')
                 rule_name = rule.get('ValidationName', '')
-                metadata = rule.get('Metadata', {})
 
-                if not metadata:
+                if not rule_id:
                     continue
 
-                # Parse the error display field if available
-                error_field = metadata.get('errorDisplayField')
-                if error_field:
-                    field_key = f"{object_name}.{error_field}"
-                    if field_key not in field_usage:
-                        field_usage[field_key] = set()
-                    field_usage[field_key].add(rule_name)
+                try:
+                    # Query individual validation rule with Metadata (only 1 row at a time)
+                    soql_single = f"SELECT Id, ValidationName, Metadata FROM ValidationRule WHERE Id = '{rule_id}'"
+                    single_result = self._tooling_query(soql_single)
 
-                # Extract fields from formula
-                formula = metadata.get('errorConditionFormula', '')
-                if formula:
-                    fields = self._extract_fields_from_formula(formula, object_name)
-                    for field in fields:
-                        field_key = f"{object_name}.{field}"
+                    if not single_result.get('records'):
+                        continue
+
+                    metadata = single_result['records'][0].get('Metadata', {})
+
+                    if not metadata:
+                        continue
+
+                    # Parse the error display field if available
+                    error_field = metadata.get('errorDisplayField')
+                    if error_field:
+                        field_key = f"{object_name}.{error_field}"
                         if field_key not in field_usage:
                             field_usage[field_key] = set()
                         field_usage[field_key].add(rule_name)
+
+                    # Extract fields from formula
+                    formula = metadata.get('errorConditionFormula', '')
+                    if formula:
+                        fields = self._extract_fields_from_formula(formula, object_name)
+                        for field in fields:
+                            field_key = f"{object_name}.{field}"
+                            if field_key not in field_usage:
+                                field_usage[field_key] = set()
+                            field_usage[field_key].add(rule_name)
+
+                except Exception as e:
+                    self._log_status(f"    ⚠️  Could not query validation rule {rule_name}: {str(e)}")
 
         except Exception as e:
             self._log_status(f"    ⚠️  Could not query validation rules: {str(e)}")

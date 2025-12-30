@@ -23,14 +23,16 @@ class MetadataSummaryData:
     
     def to_row(self, serial_number: int) -> List:
         """Convert to Excel row format"""
+        total_fields = self.standard_field_count + self.custom_field_count
         return [
             serial_number,
             self.object_name,
             self.object_api,
             self.master_object,
-            self.object_type,
+            total_fields,
             self.standard_field_count,
-            self.custom_field_count
+            self.custom_field_count,
+            self.object_type
         ]
 
 
@@ -43,9 +45,10 @@ class MetadataSummaryHelper:
         'Object Name',
         'Object API',
         'Master Object',
-        'Object Type',
+        'Total Field',
         'Standard Field',
-        'Custom Field'
+        'Custom Field',
+        'Object Type'
     ]
     
     @staticmethod
@@ -121,15 +124,17 @@ class MetadataSummaryHelper:
             # Calculate totals
             total_standard = sum(s.standard_field_count for s in summary_data)
             total_custom = sum(s.custom_field_count for s in summary_data)
+            total_all_fields = total_standard + total_custom
             
             totals_data = [
                 "",  # SL
                 "TOTAL",  # Object Name
                 "",  # Object API
                 "",  # Master Object
-                "",  # Object Type
-                total_standard,
-                total_custom
+                total_all_fields,  # Total Field
+                total_standard,  # Standard Field
+                total_custom,  # Custom Field
+                ""  # Object Type
             ]
             
             # Apply bold style to totals row
